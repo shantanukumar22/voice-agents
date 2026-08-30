@@ -1,0 +1,244 @@
+.anatomy-hero {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 0.35rem;
+}
+
+.hero-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-shrink: 0;
+  padding: 0 0.15rem;
+}
+
+.hero-crumb {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.hero-crumb span {
+  margin: 0 0.25rem;
+  color: #cbd5e1;
+}
+
+.hero-title {
+  margin: 0.15rem 0 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: #334155;
+  font-family: var(--font);
+}
+
+.view-toggle {
+  display: inline-flex;
+  padding: 0;
+  gap: 0.75rem;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+}
+
+.view-toggle button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.15rem 0;
+  border-radius: 0;
+  border-bottom: 1px solid transparent;
+  cursor: pointer;
+}
+
+.view-toggle button.on {
+  background: transparent;
+  color: #0f172a;
+  box-shadow: none;
+  border-bottom-color: #0f172a;
+}
+
+.hero-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 24px;
+  background: transparent;
+  border: 0;
+  overflow: visible;
+}
+
+.hero-stage::before {
+  content: "";
+  position: absolute;
+  width: min(72%, 320px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(241, 245, 249, 0.4) 45%,
+    transparent 70%
+  );
+  box-shadow: 0 0 80px rgba(255, 255, 255, 0.8);
+  pointer-events: none;
+}
+
+.hero-stage::after {
+  content: "";
+  position: absolute;
+  width: min(58%, 260px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  pointer-events: none;
+}
+
+.body-host {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.body-host .body-chart-container {
+  padding: 0 !important;
+  height: 100% !important;
+}
+
+.body-host .body-chart-svg {
+  max-height: 100% !important;
+  max-width: min(300px, 44vw) !important;
+  width: auto !important;
+  height: 100% !important;
+  filter: drop-shadow(0 20px 40px rgba(15, 23, 42, 0.1)) !important;
+}
+
+.body-host .body-chart-background {
+  opacity: 0.22 !important;
+}
+
+.body-host .body-chart-background path {
+  fill: #cbd5e1 !important;
+}
+
+.hero-callouts {
+  position: absolute;
+  left: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-width: 130px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.callout {
+  padding: 0.25rem 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.14);
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+.callout.soft {
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
+.callout strong {
+  display: block;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.callout span {
+  font-size: 0.6rem;
+  color: #94a3b8;
+}
+
+.hero-foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-shrink: 0;
+  padding: 0.25rem 0.15rem 0;
+}
+
+.facility {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.2rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.status-dot::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+}
+
+.hero-meters {
+  min-width: min(200px, 38%);
+}
+
+.meter-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 0.28rem;
+}
+
+.meter-row em {
+  font-style: normal;
+  color: #334155;
+}
+
+.meter-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.8);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #e2e8f0, #94a3b8);
+  transition: width 400ms ease;
+}

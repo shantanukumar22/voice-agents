@@ -1,0 +1,15 @@
+[project]
+name = "medikiosk-module-a"
+version = "0.1.0"
+description = "Module A — Conversational Multimodal History Engine (Pipecat)"
+requires-python = ">=3.11"
+dependencies = [
+  "python-dotenv>=1.0.0",
+  "fastapi[standard]>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "loguru>=0.7.0",
+  "pipecat-ai[cartesia,deepgram,openai,silero,webrtc]>=0.0.92",
+]
+
+[tool.uv]
+package = false
