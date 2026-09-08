@@ -1,7 +1,7 @@
 import os
 import uuid
 from typing import List, Dict, Any
-from backend.models import ClinicalEvent, Category, SourceType, Evidence
+from backend.models.schema import ClinicalEvent, Category, SourceType, Evidence
 
 class ClinicalExtractor:
     """
@@ -13,11 +13,20 @@ class ClinicalExtractor:
     def structure_ocr_data(self, patient_id: str, ocr_data: Dict[str, Any]) -> List[ClinicalEvent]:
         """
         Converts structured data from OCREngine into ClinicalEvent models for the voice bot.
+        Handles empty or error data gracefully.
         """
-        entities = ocr_data.get("entities", [])
-        final_events = []
+        if not ocr_data:
+            return []
 
+        entities = ocr_data.get("clinical_entities") or ocr_data.get("entities")
+        if not isinstance(entities, list):
+            return []
+
+        final_events = []
         for item in entities:
+            if not isinstance(item, dict):
+                continue
+
             category_map = {
                 "diagnosis": Category.DIAGNOSIS,
                 "medication": Category.MEDICATION,

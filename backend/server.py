@@ -10,6 +10,8 @@ import argparse
 import sys
 import os
 import uuid
+import gc
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -40,8 +42,26 @@ from backend.services.ocr.clinical_extractor import ClinicalExtractor
 load_dotenv(override=True)
 
 abdm_manager = ABHAManager()
-ocr_engine = OCREngine(use_mock=os.getenv("OCR_USE_MOCK", "true").lower() == "true")
+ocr_engine = OCREngine(
+    use_mock=False,
+    preferred_provider=os.getenv("OCR_PROVIDER", "aws"),
+)
 clinical_extractor = ClinicalExtractor()
+
+
+def _remove_temp_file(path: str) -> None:
+    """Best-effort cleanup for OCR provider file handles on Windows."""
+    for attempt in range(3):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+            return
+        except PermissionError:
+            gc.collect()
+            if attempt < 2:
+                time.sleep(0.1)
+            else:
+                logger.warning("Could not remove temporary OCR file: {}", path)
 
 
 
@@ -137,9 +157,12 @@ async def verify_abha(request: Request):
     if not abha_id:
         raise HTTPException(status_code=422, detail="abha_id is required")
 
-    patient = abdm_manager.verify_abha_id(abha_id)
+    try:
+        patient = abdm_manager.verify_abha_id(abha_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not patient:
-        raise HTTPException(status_code=404, detail="ABHA ID not found or invalid")
+        raise HTTPException(status_code=422, detail="Enter a valid 14-digit ABHA number")
 
     return patient
 
@@ -168,8 +191,17 @@ async def scan_document(request: Request):
         f.write(await file.read())
 
     try:
+        # 0. Check if any OCR provider is available
+        if not (ocr_engine.gemini_model or ocr_engine.textract):
+            raise HTTPException(
+                status_code=503,
+                detail="OCR Service Unavailable: No valid GOOGLE_API_KEY or AWS credentials found in .env"
+            )
+
         # 1. Use Gemini OCR to extract clinical entities
         extracted_data = ocr_engine.extract_clinical_data(temp_path)
+        logger.info("OCR Extraction Result: {}", extracted_data)
+
 
         # 2. Use ClinicalExtractor to structure them into ClinicalEvents
         # We'll use a dummy patient_id for now or get it from a session
@@ -178,20 +210,19 @@ async def scan_document(request: Request):
 
         return {
             "status": "success",
-            "entities": extracted_data.get("entities", []),
-            "document_info": {
-                "type": extracted_data.get("document_type"),
-                "provider": extracted_data.get("provider_name"),
-                "date": extracted_data.get("document_date")
-            },
+            "document_info": extracted_data.get("document_metadata", {}),
+            "patient_info": extracted_data.get("patient_info", {}),
+            "summary": extracted_data.get("clinical_summary", ""),
+            "entities": extracted_data.get("clinical_entities", []),
+            "ocr_status": extracted_data.get("ocr_status", "provider"),
+            "structured_document": extracted_data.get("structured_document"),
             "events": [vars(e) for e in clinical_events]
         }
     except Exception as e:
         logger.exception("OCR processing failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e))
     finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        _remove_temp_file(temp_path)
 
 
 

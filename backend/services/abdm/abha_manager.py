@@ -1,8 +1,9 @@
 import os
+import re
 import uuid
 import requests
 from typing import Dict, Any, Optional
-from backend.models import ABHAInfo, ClinicalEvent
+from backend.models.schema import ABHAInfo, ClinicalEvent
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,28 +29,23 @@ class ABHAManager:
         """
         Verifies the ABHA ID via the ABDM Gateway.
         """
+        normalized_id = re.sub(r"\D", "", abha_id or "")
+        if len(normalized_id) != 14:
+            return None
+
         if not self.client_id:
-            # Fallback to mock if credentials aren't set
-            return self._mock_verify(abha_id)
+            return self._mock_verify(normalized_id)
 
         try:
             token = self._get_access_token()
-            # Real API: GET /v0.5/health-id/verify
-            # response = requests.get(f"{self.gateway_url}/v0.5/health-id/verify",
-            #                        headers={"Authorization": f"Bearer {token}"}, params={"id": abha_id})
-            # data = response.json()
-
-            # For now, we simulate a successful response from the gateway
-            return ABHAInfo(
-                abhaId=abha_id,
-                patientName="Verified Patient",
-                dob="1990-01-01",
-                gender="Other",
-                verified=True
+            # Do not claim identity verification until the ABDM endpoint and
+            # response mapping are configured for the deployed environment.
+            raise RuntimeError(
+                "ABDM credentials are present, but the ABHA verification endpoint is not configured."
             )
         except Exception as e:
             print(f"ABDM Verification Error: {e}")
-            return None
+            return self._mock_verify(normalized_id)
 
     def request_consent(self, abha_id: str, target_hospital_id: str):
         """
@@ -63,13 +59,15 @@ class ABHAManager:
         }
 
     def _mock_verify(self, abha_id: str) -> Optional[ABHAInfo]:
-        if len(abha_id) > 5:
+        if len(abha_id) == 14:
             return ABHAInfo(
                 abhaId=abha_id,
                 patientName="Mock Patient",
                 dob="1980-01-01",
                 gender="Male",
-                verified=True
+                verified=False,
+                verificationMode="mock",
+                consentRequired=True,
             )
         return None
 

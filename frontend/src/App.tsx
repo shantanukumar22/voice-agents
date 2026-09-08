@@ -177,8 +177,12 @@ export default function App() {
   const [abhaId, setAbhaId] = useState("");
   const [patientInfo, setPatientInfo] = useState<any | null>(null);
   const [scanResults, setScanResults] = useState<any[]>([]);
+  const [historyEvents, setHistoryEvents] = useState<any[]>([]);
+  const [scanSummary, setScanSummary] = useState("");
   const [isScanning, setIsScanning] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [documentStatus, setDocumentStatus] = useState<"searching" | "hold" | "captured">("searching");
 
   const [touch, setTouch] = useState<TouchPrompt>({ question: "", options: [] });
   const [fields, setFields] = useState<HistoryEntry[]>([]);
@@ -210,6 +214,10 @@ export default function App() {
   const displayRef = useRef("");
   const userStoppedAtRef = useRef<number | null>(null);
   const turnSamplesRef = useRef<number[]>([]);
+  const cameraRef = useRef<HTMLVideoElement | null>(null);
+  const captureTimerRef = useRef<number | null>(null);
+  const countdownTimerRef = useRef<number | null>(null);
+  const stabilityTimerRef = useRef<number | null>(null);
 
   const t = copy[language];
   const isConnected = transportState === "ready";
@@ -415,29 +423,120 @@ export default function App() {
     }
   }, [setTarget, scheduleEnd, absorbClinical]));
 
+  const captureCameraFrame = useCallback(async () => {
+    const video = cameraRef.current;
+    if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) {
+      setError("Camera is still getting ready. Please wait a moment and try again.");
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d")?.drawImage(video, 0, 0);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+    if (!blob) {
+      setError("The document photo could not be captured. Please try again.");
+      return;
+    }
+
+    const file = new File([blob], `camera_${Date.now()}.jpg`, { type: "image/jpeg" });
+    setSelectedFiles((previous) => [...previous, file]);
+    setDocumentStatus("captured");
+  }, []);
+
   useEffect(() => {
     if (step === "SCANNING") {
+      // Mute microphone when scanning to avoid background noise interference
+      if (client) {
+        client.enableMic(false);
+      }
+      setCameraReady(false);
+      setDocumentStatus("searching");
       navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
         .then((stream) => {
-          const video = document.getElementById("kiosk-camera") as HTMLVideoElement;
-          if (video) video.srcObject = stream;
+          const video = cameraRef.current;
+          if (video) {
+            video.srcObject = stream;
+            void video.play();
+          }
         })
-        .catch((err) => setError("Camera access denied. Please enable camera permissions."));
+        .catch(() => setError("Camera access is needed to take the document photo. You can also choose a file below."));
+    } else if (step === "INTERVIEW") {
+      // Re-enable microphone when returning to interview
+      if (client) {
+        client.enableMic(true);
+      }
     }
     return () => {
-      // Cleanup stream when leaving scanning step
-      const video = document.getElementById("kiosk-camera") as HTMLVideoElement;
-      if (video && video.srcObject) {
+      if (captureTimerRef.current != null) window.clearTimeout(captureTimerRef.current);
+      if (countdownTimerRef.current != null) window.clearInterval(countdownTimerRef.current);
+      if (stabilityTimerRef.current != null) window.clearInterval(stabilityTimerRef.current);
+      setDocumentStatus("searching");
+      const video = cameraRef.current;
+      if (video?.srcObject) {
         const stream = video.srcObject as MediaStream;
         stream.getTracks().forEach(track => track.stop());
+        video.srcObject = null;
       }
     };
-  }, [step]);
+  }, [step, client]);
+
+  const handleCameraReady = useCallback(() => {
+    if (step !== "SCANNING" || cameraReady || selectedFiles.length > 0) return;
+    setCameraReady(true);
+    const analysisCanvas = document.createElement("canvas");
+    analysisCanvas.width = 160;
+    analysisCanvas.height = 120;
+    const context = analysisCanvas.getContext("2d", { willReadFrequently: true });
+    let previousFrame: Uint8ClampedArray | null = null;
+    let stableFrames = 0;
+
+    stabilityTimerRef.current = window.setInterval(() => {
+      const video = cameraRef.current;
+      if (!video || !context || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+
+      context.drawImage(video, 0, 0, analysisCanvas.width, analysisCanvas.height);
+      const pixels = context.getImageData(24, 18, 112, 84).data;
+      let brightness = 0;
+      let movement = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        const current = (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3;
+        brightness += current;
+        if (previousFrame) movement += Math.abs(current - previousFrame[index / 4]);
+      }
+
+      const pixelCount = pixels.length / 4;
+      const averageBrightness = brightness / pixelCount;
+      const averageMovement = previousFrame ? movement / pixelCount : Number.POSITIVE_INFINITY;
+      previousFrame = new Uint8ClampedArray(pixelCount);
+      for (let index = 0, pixel = 0; index < pixels.length; index += 4, pixel += 1) {
+        previousFrame[pixel] = (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3;
+      }
+
+      const documentVisible = averageBrightness > 95;
+      const frameStable = averageMovement < 7;
+      if (documentVisible && frameStable) {
+        stableFrames += 1;
+        setDocumentStatus("hold");
+      } else {
+        stableFrames = 0;
+        setDocumentStatus("searching");
+      }
+
+      if (stableFrames >= 8 && stabilityTimerRef.current != null) {
+        window.clearInterval(stabilityTimerRef.current);
+        stabilityTimerRef.current = null;
+        void captureCameraFrame();
+      }
+    }, 180);
+  }, [cameraReady, captureCameraFrame, selectedFiles.length, step]);
 
 
   const handleVerifyAbha = async () => {
-    if (!abhaId) {
-      setError("Please enter your ABHA ID");
+    const normalizedAbhaId = abhaId.replace(/\D/g, "");
+    if (normalizedAbhaId.length !== 14) {
+      setError("Enter your 14-digit ABHA number");
       return;
     }
     setError(null);
@@ -445,7 +544,7 @@ export default function App() {
       const response = await fetch(`${API_BASE}/api/verify-abha`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ abha_id: abhaId }),
+        body: JSON.stringify({ abha_id: normalizedAbhaId }),
       });
       if (!response.ok) throw new Error("Invalid ABHA ID");
       const data = await response.json();
@@ -475,12 +574,29 @@ export default function App() {
           body: formData,
         });
 
-        if (!response.ok) throw new Error(`Failed to scan ${file.name}`);
+        if (!response.ok) {
+          let detail = `Failed to scan ${file.name}`;
+          try {
+            const failure = await response.json();
+            if (failure.detail) detail = `${detail}: ${failure.detail}`;
+          } catch {
+            // Keep the filename error when the server returns non-JSON output.
+          }
+          throw new Error(detail);
+        }
         const data = await response.json();
+
         if (Array.isArray(data.entities)) {
           allResults.push(...data.entities);
         } else {
           console.warn(`No entities returned for ${file.name}`, data);
+        }
+        if (Array.isArray(data.events)) {
+          setHistoryEvents((prev) => [...prev, ...data.events]);
+        }
+
+        if (data.summary) {
+          setScanSummary((prev) => prev ? `${prev}\n\n${data.summary}` : data.summary);
         }
       }
       setScanResults(allResults);
@@ -655,6 +771,8 @@ export default function App() {
                 placeholder="Enter ABHA ID (e.g. 12-3456-7890-1234)"
                 value={abhaId}
                 onChange={(e) => setAbhaId(e.target.value)}
+                inputMode="numeric"
+                maxLength={17}
                 autoFocus
               />
               {abhaId && (
@@ -829,8 +947,11 @@ export default function App() {
                 }}>
                   <video
                     id="kiosk-camera"
+                    ref={cameraRef}
                     autoPlay
                     playsInline
+                    muted
+                    onLoadedMetadata={handleCameraReady}
                     style={{ width: "100%", height: "100%", objectFit: "cover" }}
                   />
                   <div className="scan-overlay" style={{
@@ -841,6 +962,13 @@ export default function App() {
                     pointerEvents: "none",
                     boxShadow: "0 0 0 1000px rgba(0,0,0,0.4)"
                   }} />
+                  <div className="capture-status" aria-live="polite">
+                    {documentStatus === "captured"
+                      ? "Document captured"
+                      : documentStatus === "hold"
+                        ? "Document detected. Hold steady..."
+                        : "Move the document into the frame"}
+                  </div>
                   <div className="camera-actions" style={{
                     position: "absolute",
                     bottom: "20px",
@@ -854,23 +982,9 @@ export default function App() {
                       type="button"
                       className="btn solid wide"
                       style={{ width: "auto", padding: "0.6rem 1.5rem" }}
-                      onClick={async () => {
-                        const video = document.getElementById("kiosk-camera") as HTMLVideoElement;
-                        if (!video) return;
-
-                        const canvas = document.createElement("canvas");
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        canvas.getContext("2d")?.drawImage(video, 0, 0);
-
-                        const blob = await new Promise<Blob>((res) => canvas.toBlob(res, "image/jpeg"));
-                        if (blob) {
-                          const file = new File([blob], `capture_${Date.now()}.jpg`, { type: "image/jpeg" });
-                          setSelectedFiles((prev) => [...prev, file]);
-                        }
-                      }}
+                      onClick={() => void captureCameraFrame()}
                     >
-                      Capture Document
+                      {selectedFiles.length > 0 ? "Take Another Photo" : "Take Photo Now"}
                     </button>
                   </div>
                 </div>
@@ -938,6 +1052,27 @@ export default function App() {
                 ) : (
                   <p style={{ color: "var(--muted)", textAlign: "center" }}>No documents analyzed.</p>
                 )}
+              </div>
+              {scanSummary && (
+                <div style={{ marginTop: "1.5rem", padding: "0.8rem", background: "white", borderRadius: "8px", borderLeft: "4px solid var(--green-deep)", fontSize: "0.9rem", color: "var(--ink)" }}>
+                  <strong>AI Clinical Synthesis:</strong><br />
+                  {scanSummary}
+                </div>
+              )}
+              <div style={{ marginTop: "1.5rem" }}>
+                <strong style={{ color: "var(--green-deep)" }}>Patient history graph</strong>
+                <div className="results-grid" style={{ display: "grid", gap: "0.6rem", marginTop: "0.7rem" }}>
+                  {historyEvents.length > 0 ? historyEvents.map((event, i) => (
+                    <div key={`${event.eventId || "event"}-${i}`} style={{ padding: "0.7rem", borderLeft: "3px solid var(--green-deep)", background: "white" }}>
+                      <strong>{event.category}</strong>
+                      <span> {event.data?.entity || "Clinical finding"}</span>
+                      {event.data?.value && <span> · {event.data.value}</span>}
+                      <small style={{ display: "block", color: "var(--muted)", marginTop: "0.2rem" }}>Source: {event.source || "OCR"}</small>
+                    </div>
+                  )) : (
+                    <p style={{ color: "var(--muted)" }}>No structured history events captured.</p>
+                  )}
+                </div>
               </div>
               <p style={{ marginTop: "1.5rem", fontWeight: "600", color: "var(--ink)" }}>
                 {doneSummary || "Conversation history recorded."}
