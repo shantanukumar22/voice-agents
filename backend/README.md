@@ -45,12 +45,14 @@ ABDM_CLIENT_SECRET=your_client_secret
 
 Use AWS profiles or IAM roles instead of long-lived access keys where possible.
 
-Start the API from the repository root:
+Install the shared bot/backend environment, then start the integrated API from the repository root:
 
 ```powershell
-$env:PYTHONPATH="C:\path\to\repository;C:\path\to\repository\backend"
-python backend/server.py
+uv sync --project bot
+uv run --project bot uvicorn backend.server:app --host 127.0.0.1 --port 7860
 ```
+
+No custom `PYTHONPATH` is required. For reload during development, append `--reload`.
 
 The backend listens on `http://127.0.0.1:7860`.
 

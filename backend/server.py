@@ -13,7 +13,15 @@ import uuid
 import gc
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
+
+# The voice module predates package-style imports and imports sibling modules by name.
+# Add its repository-relative directory for both `python backend/server.py` and
+# `uvicorn backend.server:app`; this avoids machine-specific PYTHONPATH settings.
+BOT_DIR = Path(__file__).resolve().parents[1] / "bot"
+if str(BOT_DIR) not in sys.path:
+    sys.path.insert(0, str(BOT_DIR))
 
 import ssl_fix
 
@@ -34,7 +42,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from main import run_bot
+from bot import run_bot
 from backend.services.abdm.abha_manager import ABHAManager
 from backend.services.ocr.ocr_engine import OCREngine
 from backend.services.ocr.clinical_extractor import ClinicalExtractor
