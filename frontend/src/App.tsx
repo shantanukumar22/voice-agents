@@ -571,6 +571,7 @@ export default function App() {
 
         const response = await fetch(`${API_BASE}/api/scan-document`, {
           method: "POST",
+          headers: { "X-Patient-ID": patientInfo?.patientId || patientInfo?.abhaId || "" },
           body: formData,
         });
 

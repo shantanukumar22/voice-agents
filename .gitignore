@@ -7,3 +7,4 @@ node_modules/
 client/dist/
 *.log
 .python-version
+.uv-cache/
