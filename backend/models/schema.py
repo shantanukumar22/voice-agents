@@ -5,8 +5,9 @@ from datetime import datetime
 
 class DocumentType(str, Enum):
     PRESCRIPTION = "prescription"
-    LAB_REPORT = "lab_report"
+    LAB_REPORT = "laboratory_report"
     DISCHARGE_SUMMARY = "discharge_summary"
+    IMAGING_REPORT = "imaging_report"
     CLINICAL_NOTE = "clinical_note"
     IDENTITY_PROOF = "identity_proof"
     UNKNOWN = "unknown"

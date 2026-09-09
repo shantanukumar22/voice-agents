@@ -50,8 +50,11 @@ def normalize_ocr_result(result: Dict[str, Any]) -> Dict[str, Any]:
         else 0.0
     )
 
+    document_type = str(result.get("document_type", "unknown")).lower().replace(" ", "_")
+    if document_type == "lab_report":
+        document_type = "laboratory_report"
     envelope = OCRStructuredDocument(
-        document_type=str(result.get("document_type", "unknown")).lower().replace(" ", "_"),
+        document_type=document_type,
         confidence_score=average_confidence,
         data=structured_data,
         extraction_errors=result.get("extraction_errors") or [],

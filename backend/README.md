@@ -162,6 +162,13 @@ npm run build
 
 Do not commit `.env`, AWS credentials, Gemini keys, or temporary uploaded images.
 
+## Patient document history
+
+Successful scans are persisted in the patient's longitudinal history. See
+[`../docs/PATIENT_HISTORY_DB.md`](../docs/PATIENT_HISTORY_DB.md) for the PostgreSQL/Supabase
+schema, `DATABASE_URL` setup, migration command, identity header, and retrieval API. The API
+fails clearly at startup when `DATABASE_URL` is missing.
+
 ## Team Integration
 
 Merge this branch through a pull request:

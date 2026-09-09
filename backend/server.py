@@ -38,8 +38,14 @@ from main import run_bot
 from backend.services.abdm.abha_manager import ABHAManager
 from backend.services.ocr.ocr_engine import OCREngine
 from backend.services.ocr.clinical_extractor import ClinicalExtractor
+from backend.database import close_pool, migrate, open_pool
+from backend.repositories.medical_documents import (
+    MedicalDocumentRepository,
+    PatientNotFoundError,
+)
+from backend.services.patient_history import InvalidOCRPayloadError, PatientHistoryService
 
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 abdm_manager = ABHAManager()
 ocr_engine = OCREngine(
@@ -47,6 +53,8 @@ ocr_engine = OCREngine(
     preferred_provider=os.getenv("OCR_PROVIDER", "aws"),
 )
 clinical_extractor = ClinicalExtractor()
+medical_document_repository = MedicalDocumentRepository()
+patient_history_service = PatientHistoryService(medical_document_repository)
 
 
 def _remove_temp_file(path: str) -> None:
@@ -116,8 +124,13 @@ small_webrtc_handler = SmallWebRTCRequestHandler(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    await small_webrtc_handler.close()
+    pool = open_pool()
+    migrate(pool)
+    try:
+        yield
+    finally:
+        close_pool()
+        await small_webrtc_handler.close()
 
 
 app = FastAPI(title="MediKiosk Module A", lifespan=lifespan)
@@ -164,7 +177,10 @@ async def verify_abha(request: Request):
     if not patient:
         raise HTTPException(status_code=422, detail="Enter a valid 14-digit ABHA number")
 
-    return patient
+    patient_data = patient.model_dump()
+    patient_id = patient_data["abhaId"]
+    medical_document_repository.upsert_patient(patient_id, patient_data.get("patientName"))
+    return {**patient_data, "patientId": patient_id}
 
 
 @app.post("/api/scan-document")
@@ -181,6 +197,12 @@ async def scan_document(request: Request):
     # In a real FastAPI app, we'd use UploadFile. Here we handle it via request.form()
     form = await request.form()
     file = form.get("file")
+
+    patient_id = request.headers.get("X-Patient-ID", "").strip()
+    if not patient_id:
+        raise HTTPException(status_code=401, detail="X-Patient-ID is required")
+    if not medical_document_repository.patient_exists(patient_id):
+        raise HTTPException(status_code=404, detail="Patient not found; verify ABHA first")
 
     if not file:
         raise HTTPException(status_code=400, detail="No file provided")
@@ -203,9 +225,14 @@ async def scan_document(request: Request):
         logger.info("OCR Extraction Result: {}", extracted_data)
 
 
-        # 2. Use ClinicalExtractor to structure them into ClinicalEvents
-        # We'll use a dummy patient_id for now or get it from a session
-        patient_id = "temp_patient"
+        # 2. Persist the complete OCR envelope under the current patient identity.
+        stored_document, created = patient_history_service.persist_ocr_result(
+            patient_id,
+            extracted_data,
+            original_file_reference=getattr(file, "filename", None),
+        )
+
+        # 3. Preserve the existing event response for backward compatibility.
         clinical_events = clinical_extractor.structure_ocr_data(patient_id, extracted_data)
 
         return {
@@ -216,13 +243,52 @@ async def scan_document(request: Request):
             "entities": extracted_data.get("clinical_entities", []),
             "ocr_status": extracted_data.get("ocr_status", "provider"),
             "structured_document": extracted_data.get("structured_document"),
+            "medical_document": stored_document,
+            "persisted": created,
             "events": [vars(e) for e in clinical_events]
         }
+    except InvalidOCRPayloadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PatientNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Patient not found") from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("OCR processing failed")
         raise HTTPException(status_code=503, detail=str(e))
     finally:
         _remove_temp_file(temp_path)
+
+
+def _authorize_patient(request: Request, patient_id: str) -> None:
+    current_patient_id = request.headers.get("X-Patient-ID", "").strip()
+    if not current_patient_id:
+        raise HTTPException(status_code=401, detail="X-Patient-ID is required")
+    if current_patient_id != patient_id:
+        raise HTTPException(status_code=403, detail="Patient history access denied")
+
+
+@app.get("/api/patients/{patient_id}/medical-documents")
+async def patient_medical_history(
+    patient_id: str, request: Request, document_type: str | None = None
+):
+    _authorize_patient(request, patient_id)
+    try:
+        documents = patient_history_service.history(patient_id, document_type)
+    except InvalidOCRPayloadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PatientNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Patient not found") from exc
+    return {"patient_id": patient_id, "documents": documents, "count": len(documents)}
+
+
+@app.get("/api/patients/{patient_id}/medical-documents/{document_id}")
+async def patient_medical_document(patient_id: str, document_id: str, request: Request):
+    _authorize_patient(request, patient_id)
+    document = patient_history_service.document(patient_id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Medical document not found")
+    return document
 
 
 
