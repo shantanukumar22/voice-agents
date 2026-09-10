@@ -8,3 +8,9 @@ client/dist/
 *.log
 .python-version
 .uv-cache/
+
+project_idea.md
+# Temporary scratch & dev scripts
+scratch/
+backend/scratch/
+backend/scripts/
