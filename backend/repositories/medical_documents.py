@@ -98,14 +98,53 @@ class MedicalDocumentRepository:
             ).fetchone()
         return self._serialize(row) if row else None
 
+    def get_by_id(self, document_id: str) -> dict[str, Any] | None:
+        try:
+            parsed_id = UUID(document_id)
+        except ValueError:
+            return None
+        with self.pool.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM medical_documents WHERE id=%s",
+                (parsed_id,),
+            ).fetchone()
+        return self._serialize(row) if row else None
+
+    def update_indexing_status(
+        self,
+        document_id: str,
+        status: str,
+        error: str | None = None,
+        increment_attempts: bool = False,
+    ) -> None:
+        parsed_id = UUID(document_id)
+        sql = """
+            UPDATE medical_documents
+            SET indexing_status = %s,
+                indexing_error = %s,
+                updated_at = CURRENT_TIMESTAMP
+        """
+        params: list[Any] = [status, error]
+        if increment_attempts:
+            sql += ", indexing_attempts = indexing_attempts + 1"
+        if status == "completed":
+            sql += ", indexed_at = CURRENT_TIMESTAMP"
+
+        sql += " WHERE id = %s"
+        params.append(parsed_id)
+
+        with self.pool.connection() as connection, connection.transaction():
+            connection.execute(sql, params)
+
     @staticmethod
     def _serialize(row: dict[str, Any]) -> dict[str, Any]:
         result = dict(row)
         for key in ("id", "ocr_document_id"):
             result[key] = str(result[key])
-        for key in ("extraction_timestamp", "clinical_document_date", "created_at", "updated_at"):
+        for key in ("extraction_timestamp", "clinical_document_date", "created_at", "updated_at", "indexed_at"):
             if result.get(key) is not None:
-                result[key] = result[key].isoformat()
-        result["data"] = result.pop("structured_data")
-        result["ocr_result"] = result.pop("complete_ocr_result")
+                result[key] = result[key].isoformat() if hasattr(result[key], "isoformat") else str(result[key])
+        result["data"] = result.pop("structured_data", {}) if "structured_data" in result else result.get("data", {})
+        result["ocr_result"] = result.pop("complete_ocr_result", {}) if "complete_ocr_result" in result else result.get("ocr_result", {})
         return result
+

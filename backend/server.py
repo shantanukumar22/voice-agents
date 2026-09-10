@@ -52,6 +52,8 @@ from backend.repositories.medical_documents import (
     PatientNotFoundError,
 )
 from backend.services.patient_history import InvalidOCRPayloadError, PatientHistoryService
+from backend.services.document_indexing_service import DocumentIndexingService
+from backend.services.rag_generator import RAGAnswerGenerator
 
 load_dotenv(override=False)
 
@@ -63,6 +65,15 @@ ocr_engine = OCREngine(
 clinical_extractor = ClinicalExtractor()
 medical_document_repository = MedicalDocumentRepository()
 patient_history_service = PatientHistoryService(medical_document_repository)
+document_indexing_service = DocumentIndexingService(medical_document_repository)
+_rag_generator: RAGAnswerGenerator | None = None
+
+def get_rag_generator() -> RAGAnswerGenerator:
+    global _rag_generator
+    if _rag_generator is None:
+        _rag_generator = RAGAnswerGenerator()
+    return _rag_generator
+
 
 
 def _remove_temp_file(path: str) -> None:
@@ -192,17 +203,11 @@ async def verify_abha(request: Request):
 
 
 @app.post("/api/scan-document")
-async def scan_document(request: Request):
+async def scan_document(request: Request, background_tasks: BackgroundTasks):
     """
-    Handles medical document upload, runs Gemini OCR, and extracts clinical entities.
+    Handles medical document upload, runs Gemini OCR, extracts clinical entities,
+    and enqueues background RAG knowledge base indexing.
     """
-    from fastapi import UploadFile, File
-    # Since the current server uses a generic 'Request' for everything,
-    # we need to handle the multipart form data.
-    # However, for simplicity and to match the existing style,
-    # I will implement a helper that processes the uploaded file.
-
-    # In a real FastAPI app, we'd use UploadFile. Here we handle it via request.form()
     form = await request.form()
     file = form.get("file")
 
@@ -232,7 +237,6 @@ async def scan_document(request: Request):
         extracted_data = ocr_engine.extract_clinical_data(temp_path)
         logger.info("OCR Extraction Result: {}", extracted_data)
 
-
         # 2. Persist the complete OCR envelope under the current patient identity.
         stored_document, created = patient_history_service.persist_ocr_result(
             patient_id,
@@ -240,7 +244,12 @@ async def scan_document(request: Request):
             original_file_reference=getattr(file, "filename", None),
         )
 
-        # 3. Preserve the existing event response for backward compatibility.
+        # 3. Trigger background RAG knowledge base indexing
+        document_id = stored_document.get("id")
+        if document_id:
+            background_tasks.add_task(document_indexing_service.index_document, document_id)
+
+        # 4. Preserve the existing event response for backward compatibility.
         clinical_events = clinical_extractor.structure_ocr_data(patient_id, extracted_data)
 
         return {
@@ -253,10 +262,12 @@ async def scan_document(request: Request):
             "structured_document": extracted_data.get("structured_document"),
             "medical_document": stored_document,
             "persisted": created,
+            "indexing_status": stored_document.get("indexing_status", "pending"),
             "events": [vars(e) for e in clinical_events]
         }
     except InvalidOCRPayloadError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     except PatientNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Patient not found") from exc
     except HTTPException:
@@ -297,6 +308,59 @@ async def patient_medical_document(patient_id: str, document_id: str, request: R
     if document is None:
         raise HTTPException(status_code=404, detail="Medical document not found")
     return document
+
+
+@app.get("/api/patients/{patient_id}/medical-documents/{document_id}/indexing-status")
+async def patient_document_indexing_status(patient_id: str, document_id: str, request: Request):
+    _authorize_patient(request, patient_id)
+    document = patient_history_service.document(patient_id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Medical document not found")
+    return {
+        "document_id": document_id,
+        "patient_id": patient_id,
+        "indexing_status": document.get("indexing_status", "unknown"),
+        "indexing_attempts": document.get("indexing_attempts", 0),
+        "indexing_error": document.get("indexing_error"),
+        "indexed_at": document.get("indexed_at"),
+    }
+
+
+@app.post("/api/rag/ask")
+async def ask_rag(request: Request):
+    """
+    Executes grounded RAG search over patient-specific OCR documents and clinical knowledge base.
+    """
+    body = await request.json()
+    query = body.get("query")
+    if not query or not str(query).strip():
+        raise HTTPException(status_code=422, detail="query string is required")
+
+    patient_id = body.get("patient_id") or request.headers.get("X-Patient-ID", "").strip() or None
+    document_type = body.get("document_type")
+    top_k = int(body.get("top_k", 5))
+
+    try:
+        generator = get_rag_generator()
+        response = generator.answer_question(
+            query=query.strip(),
+            patient_id=patient_id,
+            document_type=document_type,
+            top_k=top_k
+        )
+        return {
+            "query": response.query,
+            "answer": response.answer,
+            "patient_id": response.patient_id,
+            "sources": response.sources,
+            "is_grounded": response.is_grounded,
+            "retrieved_chunks_count": len(response.retrieved_chunks),
+            "estimated_tokens": response.estimated_tokens
+        }
+    except Exception as exc:
+        logger.exception("RAG query generation failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
 
 
 
