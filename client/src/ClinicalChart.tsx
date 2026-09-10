@@ -232,6 +232,48 @@ export default function ClinicalChart({
         </div>
       )}
 
+      <div className="cchart-timeline">
+        <p className="cchart-sec">
+          {lang === "hi" ? "लाइव इतिहास" : "Live history"}
+        </p>
+        {entries.length === 0 ? (
+          <p className="cchart-empty">
+            {lang === "hi"
+              ? "जैसे ही मरीज़ जवाब देंगे, इतिहास यहाँ भरता जाएगा।"
+              : "As the patient answers, history will fill in here."}
+          </p>
+        ) : (
+          <ul className="cchart-feed">
+            {[...entries].reverse().map((e, i) => {
+              const section = (e.section || "").toLowerCase();
+              const field = (e.field || "").replace(/_/g, " ");
+              const sectionLabel =
+                {
+                  chief_complaint: lang === "hi" ? "शिकायत" : "Complaint",
+                  hpi: "HPI",
+                  past_medical_surgical: lang === "hi" ? "पुराना" : "Past",
+                  drug_allergy: lang === "hi" ? "दवा" : "Meds",
+                  family_history: lang === "hi" ? "परिवार" : "Family",
+                  personal_history: lang === "hi" ? "व्यक्तिगत" : "Personal",
+                  review_of_systems: "ROS",
+                }[section] || section || (lang === "hi" ? "नोट" : "Note");
+              return (
+                <li key={`${e.section}-${e.field}-${i}`} className="cchart-feed-item">
+                  <span className="feed-dot" aria-hidden />
+                  <div>
+                    <p className="feed-meta">
+                      <strong>{sectionLabel}</strong>
+                      {field ? <em>{field}</em> : null}
+                    </p>
+                    <p className="feed-value">{e.value}</p>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
       <div className="cchart-progress">
         <div className="prog-row">
           <span>{lang === "hi" ? "इतिहास पूर्णता" : "History completeness"}</span>

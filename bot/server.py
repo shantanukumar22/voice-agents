@@ -19,7 +19,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from pipecat.transports.smallwebrtc.connection import IceServer
 from pipecat.transports.smallwebrtc.request_handler import (
@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI):
     await small_webrtc_handler.close()
 
 
-app = FastAPI(title="MediKiosk Module A", lifespan=lifespan)
+app = FastAPI(title="AYUVAANI Module A", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -118,6 +118,26 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 @app.get("/health")
 async def health():
     return {"ok": True, "module": "A", "name": "conversational-multimodal-history-engine"}
+
+
+@app.post("/api/tts")
+async def guide_tts(request: Request):
+    """Same Cartesia voice as the interview (Kabir) for kiosk guide prompts."""
+    body = await request.json()
+    text = str(body.get("text") or "").strip()
+    language = str(body.get("language") or "hi")
+    if not text:
+        raise HTTPException(status_code=422, detail="text is required")
+    try:
+        from tts_guide import synthesize_guide_mp3
+
+        audio = await synthesize_guide_mp3(text, language)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Guide TTS failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(content=audio, media_type="audio/mpeg")
 
 
 def _session_from_request_data(request_data: Any) -> dict[str, Any]:

@@ -13,9 +13,14 @@
     "@pipecat-ai/client-js": "^1.13.0",
     "@pipecat-ai/client-react": "^1.8.2",
     "@pipecat-ai/small-webrtc-transport": "^1.10.6",
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
+    "@types/three": "^0.185.4",
     "body-muscles": "^1.0.0",
+    "lucide-react": "^1.44.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "three": "^0.186.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

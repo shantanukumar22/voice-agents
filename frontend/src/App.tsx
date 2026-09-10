@@ -91,7 +91,7 @@ function graphemes(text: string): string[] {
 
 const copy = {
   en: {
-    brand: "MediKiosk",
+    brand: "AYUVAANI",
     tagline: "Outpatient clinical history",
     language: "Language",
     ayush: "Include AYUSH history",
@@ -107,7 +107,7 @@ const copy = {
     restart: "New patient",
     profileHint: "Live chart",
     bodyHint: "Anatomy",
-    welcome: "Welcome to MediKiosk",
+    welcome: "Welcome to AYUVAANI",
     verifyAbha: "Verify ABHA ID",
     consentTitle: "Patient Consent",
     consentBody: "I consent to record my medical history and upload my documents for the current clinical consultation.",
@@ -116,7 +116,7 @@ const copy = {
     reviewSummary: "Review Summary",
   },
   hi: {
-    brand: "MediKiosk",
+    brand: "AYUVAANI",
     tagline: "OPD नैदानिक इतिहास",
     language: "भाषा",
     ayush: "आयुष इतिहास शामिल करें",
@@ -132,7 +132,7 @@ const copy = {
     restart: "नया मरीज़",
     profileHint: "लाइव चार्ट",
     bodyHint: "शरीर",
-    welcome: "MediKiosk में आपका स्वागत है",
+    welcome: "AYUVAANI में आपका स्वागत है",
     verifyAbha: "ABHA ID सत्यापित करें",
     consentTitle: "मरीज की सहमति",
     consentBody: "मैं वर्तमान नैदानिक परामर्श के लिए अपने चिकित्सा इतिहास को रिकॉर्ड करने और अपने दस्तावेज़ अपलोड करने की सहमति देता हूँ।",
@@ -141,7 +141,7 @@ const copy = {
     reviewSummary: "सारांश देखें",
   },
   hinglish: {
-    brand: "MediKiosk",
+    brand: "AYUVAANI",
     tagline: "OPD clinical history",
     language: "Language",
     ayush: "AYUSH history include karein",
@@ -157,7 +157,7 @@ const copy = {
     restart: "Naya patient",
     profileHint: "Live chart",
     bodyHint: "Body map",
-    welcome: "Welcome to MediKiosk",
+    welcome: "Welcome to AYUVAANI",
     verifyAbha: "ABHA ID verify karein",
     consentTitle: "Patient Consent",
     consentBody: "Main current consultation ke liye apna medical history record karne aur documents upload karne ki consent deta hoon.",
@@ -824,7 +824,7 @@ export default function App() {
           <aside className="h-nav">
             <div className="h-brand">
               <span className="brand-mark" aria-hidden />
-              <div><strong>MediKiosk</strong><em>OPD History</em></div>
+              <div><strong>AYUVAANI</strong><em>OPD History</em></div>
             </div>
             <nav className="h-steps" aria-label="History sections">
               {HISTORY_STEPS.map((stepItem) => {
@@ -887,7 +887,7 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      <p className="ai-dock-label">MediKiosk AI</p>
+                      <p className="ai-dock-label">AYUVAANI AI</p>
                       <div className="voice-row">
                         <div className="voice-orb-wrap">
                           <div className="voice-orb" aria-hidden>

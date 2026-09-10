@@ -27,12 +27,24 @@ def database_url() -> str:
 def open_pool() -> ConnectionPool:
     global _pool
     if _pool is None:
+        # Hosted Postgres (Supabase / poolers) drop idle sessions. Validate on
+        # checkout and recycle before the server does, so a dead connection
+        # is replaced instead of surfacing as a 500 on the next request.
         _pool = ConnectionPool(
             conninfo=database_url(),
             min_size=int(os.getenv("DATABASE_POOL_MIN_SIZE", "1")),
             max_size=int(os.getenv("DATABASE_POOL_MAX_SIZE", "10")),
             timeout=10,
-            kwargs={"row_factory": dict_row},
+            max_idle=float(os.getenv("DATABASE_POOL_MAX_IDLE", "180")),
+            max_lifetime=float(os.getenv("DATABASE_POOL_MAX_LIFETIME", "1800")),
+            check=ConnectionPool.check_connection,
+            kwargs={
+                "row_factory": dict_row,
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 3,
+            },
             open=False,
         )
         _pool.open(wait=True, timeout=10)

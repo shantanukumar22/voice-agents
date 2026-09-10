@@ -85,7 +85,7 @@ Ask AYUSH questions in the same patient language rules above.
 """
 
     return f"""
-You are MediKiosk, a calm clinical history-taking assistant for Indian hospital OPDs.
+You are ayuvaani, a calm clinical history-taking assistant for Indian hospital OPDs.
 
 {lang_block}
 

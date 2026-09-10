@@ -1,0 +1,82 @@
+.anat-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border-radius: 22px;
+  overflow: hidden;
+  background: radial-gradient(120% 140% at 50% 0%, #131a30 0%, #060812 70%);
+}
+
+.anat-viewport--light {
+  background: radial-gradient(120% 140% at 50% 0%, #fff7ef 0%, #f0e4d8 70%);
+}
+
+.anat-viewport canvas {
+  display: block;
+  touch-action: none;
+}
+
+.anat-loading {
+  color: #9fb0c2;
+  font-size: 0.85rem;
+  font-family: inherit;
+  background: rgba(10, 15, 20, 0.7);
+  padding: 0.5rem 0.9rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.anat-viewport--light .anat-loading {
+  color: #5a6478;
+  background: rgba(255, 255, 255, 0.78);
+}
+/* 
+.anat-hotspot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4f8bff;
+  box-shadow: 0 0 0 4px rgba(79, 139, 255, 0.24), 0 0 14px 4px rgba(79, 139, 255, 0.55);
+  animation: anat-pulse 1.6s ease-in-out infinite;
+  pointer-events: none;
+} */
+
+/* .anat-viewport--light .anat-hotspot {
+  background: #3d78f0;
+  box-shadow: 0 0 0 4px rgba(61, 120, 240, 0.2), 0 0 14px 4px rgba(61, 120, 240, 0.4);
+} */
+
+@keyframes anat-pulse {
+  0%, 100% { transform: scale(0.85); opacity: 0.85; }
+  50% { transform: scale(1.25); opacity: 1; }
+}
+
+.anat-credit {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  margin: 0;
+  font-size: 0.62rem;
+  letter-spacing: 0.02em;
+  color: rgba(190, 202, 215, 0.55);
+  pointer-events: auto;
+}
+
+.anat-credit a {
+  color: rgba(210, 222, 235, 0.75);
+}
+
+.anat-viewport--light .anat-credit {
+  color: rgba(70, 78, 96, 0.55);
+}
+
+.anat-viewport--light .anat-credit a {
+  color: rgba(50, 70, 130, 0.8);
+}
+
+@media (max-width: 900px) {
+  .anat-viewport {
+    border-radius: 16px;
+  }
+}

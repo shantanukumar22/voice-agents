@@ -1,7 +1,7 @@
 """
 Module A — Conversational Multimodal History Engine (Pipecat bot).
 
-Voice path: Deepgram STT → OpenAI LLM → Cartesia TTS
+Voice path: Deepgram STT → OpenAI LLM → Cartesia or OpenAI TTS
 Touch path: RTVI client messages inject the same answers into the LLM context
 """
 
@@ -19,7 +19,7 @@ from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMMessagesAppendFrame, LLMRunFrame
+from pipecat.frames.frames import LLMMessagesAppendFrame, LLMRunFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -31,6 +31,7 @@ from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.services.tts_service import TextAggregationMode
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import TransportParams
@@ -186,15 +187,37 @@ async def run_bot(webrtc_connection, session_config: dict[str, Any] | None = Non
     voice_id = os.getenv("CARTESIA_VOICE_ID") or default_voices.get(
         language, default_voices["en"]
     )
-    tts = CartesiaTTSService(
-        api_key=os.getenv("CARTESIA_API_KEY"),
-        settings=CartesiaTTSService.Settings(
-            voice=voice_id,
-            language=tts_language,
-            model="sonic-3.5",
-        ),
-        text_aggregation_mode=TextAggregationMode.TOKEN,
-    )
+    tts_provider = (os.getenv("TTS_PROVIDER") or "cartesia").strip().lower()
+    if tts_provider == "openai":
+        openai_voice = (os.getenv("OPENAI_TTS_VOICE") or "nova").strip()
+        openai_model = (os.getenv("OPENAI_TTS_MODEL") or "gpt-4o-mini-tts").strip()
+        tts_instructions = (
+            "Speak as a calm medical interview assistant. "
+            "Clear pace, warm tone, no filler."
+        )
+        if language in ("hi", "hinglish"):
+            tts_instructions += " Prefer natural Hindi pronunciation."
+        tts = OpenAITTSService(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            settings=OpenAITTSService.Settings(
+                voice=openai_voice,
+                model=openai_model,
+                instructions=tts_instructions,
+            ),
+            text_aggregation_mode=TextAggregationMode.TOKEN,
+        )
+        logger.info(f"TTS provider=openai voice={openai_voice} model={openai_model}")
+    else:
+        tts = CartesiaTTSService(
+            api_key=os.getenv("CARTESIA_API_KEY"),
+            settings=CartesiaTTSService.Settings(
+                voice=voice_id,
+                language=tts_language,
+                model="sonic-3.5",
+            ),
+            text_aggregation_mode=TextAggregationMode.TOKEN,
+        )
+        logger.info(f"TTS provider=cartesia voice={voice_id}")
     llm = OpenAILLMService(
         api_key=os.getenv("OPENAI_API_KEY"),
         model=os.getenv("OPENAI_MODEL", "gpt-4.1"),
@@ -344,30 +367,51 @@ async def run_bot(webrtc_connection, session_config: dict[str, Any] | None = Non
                 "ayush_mode": ayush_mode,
             }
         )
-        kickoff = {
-            "hi": (
-                "मरीज़ तैयार है। देवनागरी में नमस्ते कहें। "
-                "केवल एक वाक्य में पूछें कि आज अस्पताल क्यों आए हैं। "
-                "मना है: विकल्प पढ़ना; 'कृपया बताएं या छूकर चुनें'; "
-                "बोलने/चुनने/छूने की कोई भी हिदायत। "
-                "फिर present_touch_options बुलाएँ — बटन देवनागरी में हों।"
-            ),
-            "hinglish": (
-                "Patient is ready. Greet once. Ask why they came today in one sentence. "
-                "Forbidden: reading options; any tell/touch/choose coaching "
-                "(e.g. 'please tell or tap to choose'). Call present_touch_options."
-            ),
-            "en": (
-                "Patient is ready. Greet once. Ask what brought them today in one sentence. "
-                "Forbidden: reading options; any speak/touch/choose coaching. "
-                "Call present_touch_options."
-            ),
-        }.get(
-            language,
-            "Patient is ready. Ask the chief complaint only. No answer-mode coaching. Call present_touch_options.",
+        # Fixed first question — push UI choices immediately (don't wait on LLM tool call).
+        if language == "hi":
+            first_q = "अस्पताल आज किस वजह से आए हैं?"
+            first_opts = [
+                "बुखार",
+                "दर्द",
+                "खांसी / सर्दी",
+                "पेट की समस्या",
+                "चक्कर / कमज़ोरी",
+                "कुछ और",
+            ]
+        elif language == "hinglish":
+            first_q = "Aaj hospital kis wajah se aaye ho?"
+            first_opts = [
+                "Fever / bukhar",
+                "Dard / pain",
+                "Khansi / cold",
+                "Pet ki problem",
+                "Chakkar / weakness",
+                "Kuch aur",
+            ]
+        else:
+            first_q = "What brings you to the hospital today?"
+            first_opts = [
+                "Fever",
+                "Pain",
+                "Cough / cold",
+                "Stomach issue",
+                "Dizziness / weakness",
+                "Something else",
+            ]
+        await push_ui(
+            {
+                "type": "touch_prompt",
+                "question": first_q,
+                "options": first_opts,
+                "section": "chief_complaint",
+            }
         )
-        context.add_message({"role": "system", "content": kickoff})
-        await worker.queue_frames([LLMRunFrame()])
+        # Speak the fixed opener immediately via TTS (don't wait on LLM).
+        # Keep spoken line = on-screen question so UI text can stay in sync.
+        spoken = first_q
+        context.add_message({"role": "assistant", "content": spoken})
+        await worker.queue_frames([TTSSpeakFrame(text=spoken)])
+        # Wait for the patient's answer (voice or tap) — no LLM kickoff needed.
 
     @worker.rtvi.event_handler("on_client_message")
     async def on_client_message(rtvi, msg):

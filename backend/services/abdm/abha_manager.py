@@ -33,7 +33,12 @@ class ABHAManager:
         if len(normalized_id) != 14:
             return None
 
-        if not self.client_id:
+        # Treat empty / placeholder credentials as mock mode (local kiosk).
+        if (
+            not self.client_id
+            or self.client_id.startswith("your_")
+            or self.client_secret in (None, "", "your_client_secret")
+        ):
             return self._mock_verify(normalized_id)
 
         try:

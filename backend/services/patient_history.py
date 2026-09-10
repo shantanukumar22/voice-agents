@@ -7,7 +7,45 @@ from uuid import UUID
 from backend.repositories.medical_documents import MedicalDocumentRepository
 
 
-DOCUMENT_TYPE_ALIASES = {"lab_report": "laboratory_report"}
+DOCUMENT_TYPE_ALIASES = {
+    "lab_report": "laboratory_report",
+    "lab": "laboratory_report",
+    "laboratory": "laboratory_report",
+    "labs": "laboratory_report",
+    "blood_report": "laboratory_report",
+    "blood_test": "laboratory_report",
+    "pathology": "laboratory_report",
+    "pathology_report": "laboratory_report",
+    "test_report": "laboratory_report",
+    "report": "laboratory_report",
+    "rx": "prescription",
+    "medicine": "prescription",
+    "medication": "prescription",
+    "medications": "prescription",
+    "opd_slip": "prescription",
+    "opd": "prescription",
+    "script": "prescription",
+    "discharge": "discharge_summary",
+    "discharge_note": "discharge_summary",
+    "discharge_summary_report": "discharge_summary",
+    "clinical_note": "discharge_summary",
+    "clinical_notes": "discharge_summary",
+    "progress_note": "discharge_summary",
+    "imaging": "imaging_report",
+    "radiology": "imaging_report",
+    "radiology_report": "imaging_report",
+    "xray": "imaging_report",
+    "x_ray": "imaging_report",
+    "ct": "imaging_report",
+    "mri": "imaging_report",
+    "ultrasound": "imaging_report",
+    "usg": "imaging_report",
+    # OCR sometimes returns these — keep the upload usable on the kiosk
+    "unknown": "laboratory_report",
+    "other": "laboratory_report",
+    "medical_document": "laboratory_report",
+    "identity_proof": "laboratory_report",
+}
 DOCUMENT_TYPES = {
     "prescription", "laboratory_report", "discharge_summary", "imaging_report"
 }
@@ -18,13 +56,25 @@ class InvalidOCRPayloadError(ValueError):
 
 
 def normalize_document_type(value: Any) -> str:
-    normalized = str(value or "").strip().lower().replace(" ", "_")
+    normalized = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
     normalized = DOCUMENT_TYPE_ALIASES.get(normalized, normalized)
-    if normalized not in DOCUMENT_TYPES:
+    if normalized in DOCUMENT_TYPES:
+        return normalized
+    # Soft-coerce OCR inventions (e.g. "jaundice_report") so kiosk uploads
+    # never hard-fail on document_type alone.
+    if any(k in normalized for k in ("xray", "x_ray", "mri", "ct", "ultrasound", "usg", "radiolog", "imaging")):
+        return "imaging_report"
+    if any(k in normalized for k in ("prescription", "rx", "medicin", "medication", "opd")):
+        return "prescription"
+    if any(k in normalized for k in ("discharge", "clinical_note", "progress_note", "admission")):
+        return "discharge_summary"
+    if any(k in normalized for k in ("lab", "patholog", "blood", "report", "test")):
+        return "laboratory_report"
+    if not normalized:
         raise InvalidOCRPayloadError(
             f"document_type must be one of: {', '.join(sorted(DOCUMENT_TYPES))}"
         )
-    return normalized
+    return "laboratory_report"
 
 
 def _iso_datetime(value: Any, field: str) -> str:
@@ -63,7 +113,11 @@ class PatientHistoryService:
         self.repository = repository
 
     def persist_ocr_result(
-        self, patient_id: str, ocr_result: dict[str, Any], original_file_reference: str | None = None
+        self,
+        patient_id: str,
+        ocr_result: dict[str, Any],
+        original_file_reference: str | None = None,
+        encounter_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         if not isinstance(ocr_result, dict):
             raise InvalidOCRPayloadError("OCR result must be an object")
@@ -98,7 +152,7 @@ class PatientHistoryService:
             "complete_ocr_result": ocr_result,
             "original_file_reference": original_file_reference,
         }
-        return self.repository.create(patient_id, normalized)
+        return self.repository.create(patient_id, normalized, encounter_id=encounter_id)
 
     def history(self, patient_id: str, document_type: str | None = None) -> list[dict[str, Any]]:
         normalized_type = normalize_document_type(document_type) if document_type else None

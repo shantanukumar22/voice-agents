@@ -8,9 +8,8 @@ import {
 } from "@pipecat-ai/client-react";
 import MetricsPanel from "./MetricsPanel";
 import type { MetricsSnapshot, SessionEval } from "./MetricsPanel";
-import AnatomyPanel from "./AnatomyPanel";
 import type { HistoryEntry } from "./AnatomyPanel";
-import ClinicalChart from "./ClinicalChart";
+import InterviewScene from "./InterviewScene";
 import {
   detectBodyRegions,
   detectOrganSystems,
@@ -19,9 +18,29 @@ import {
   type BodyRegionId,
   type OrganSystemId,
 } from "./bodyRegions";
+import type { Language } from "./sessionTypes";
+import type { SessionStep } from "./sessionFlow";
+import {
+  createEncounter,
+  getEncounterHistory,
+  grantConsent,
+  identifyEncounter,
+  setEncounterStep,
+  submitEncounter,
+  upsertHistoryField,
+  type ConsentScopes,
+} from "./platformApi";
+import {
+  ConsentScreen,
+  FlowAmbience,
+  IdentifyScreen,
+  ScanScreen,
+  StubStepScreen,
+  SummaryScreen,
+  WelcomeScreen,
+} from "./FlowScreens";
+import { stopSpeaking } from "./speakGuide";
 import "./App.css";
-
-type Language = "en" | "hi" | "hinglish";
 
 type TouchPrompt = {
   question: string;
@@ -35,6 +54,50 @@ type RedFlag = {
 };
 
 const BOT_URL = import.meta.env.VITE_BOT_OFFER_URL ?? "/api/offer";
+
+/** First Module A question is fixed — show it before LLM / TTS catch up. */
+function firstChiefPrompt(language: Language): TouchPrompt {
+  if (language === "hi") {
+    return {
+      question: "अस्पताल आज किस वजह से आए हैं?",
+      options: [
+        "बुखार",
+        "दर्द",
+        "खांसी / सर्दी",
+        "पेट की समस्या",
+        "चक्कर / कमज़ोरी",
+        "कुछ और",
+      ],
+      section: "chief_complaint",
+    };
+  }
+  if (language === "hinglish") {
+    return {
+      question: "Aaj hospital kis wajah se aaye ho?",
+      options: [
+        "Fever / bukhar",
+        "Dard / pain",
+        "Khansi / cold",
+        "Pet ki problem",
+        "Chakkar / weakness",
+        "Kuch aur",
+      ],
+      section: "chief_complaint",
+    };
+  }
+  return {
+    question: "What brings you to the hospital today?",
+    options: [
+      "Fever",
+      "Pain",
+      "Cough / cold",
+      "Stomach issue",
+      "Dizziness / weakness",
+      "Something else",
+    ],
+    section: "chief_complaint",
+  };
+}
 
 const COACH_START_RE =
   /(?:^|[\s,;:–—\-]+)(?:(?:कृपया\s*)?(?:बताएँ?|बताएं|बताओ|बोलें?|बोलो|कहें?|कहो)\s*या\s*(?:छूकर\s*)?(?:चुनें?|चुनो|दबाएँ?|दबाएं|टैप|बटन)|(?:कृपया\s*)?छूकर\s*(?:चुनें?|चुनो|दबाएँ?|दबाएं)|आप\s*(?:बोल|बोलें|बोलो|चुन|चुनें|चुनो|बता|बताएँ|बताएं)\s*सकते\s*(?:हैं|हो)|(?:कृपया\s*)?(?:बोलें?|बोलो)\s*या\s*(?:चुनें?|चुनो|बटन|टैप|दबा|छू)|बोलें?\s*या\s*(?:बटन|टैप|चुन)|बोलो\s*या\s*(?:बटन|टैप|चुन)|स्क्रीन\s*पर\s*(?:चुन|दबा|टैप|छू)|इनमें\s*से\s*चुन|विकल्प\s*(?:हैं|दीजिए|दिए|नीचे)|(?:नीचे\s*)?(?:जवाब\s*)?दबाएँ?|you\s+(?:can|may|could)\s+(?:also\s+)?(?:speak|talk|tap|touch|choose|select|tell)|(?:please\s+|feel\s+free\s+to\s+|just\s+)?(?:speak|talk|tell|say)\s+(?:and|or|\/)\s+(?:tap|touch|choose|select)|(?:or\s+)?(?:please\s+)?(?:tap|touch|choose|select)\s+(?:an?\s+|the\s+)?(?:option|answer|button)s?|(?:the\s+)?options?\s+(?:are|below|on\s+(?:the\s+)?screen))/gi;
@@ -104,7 +167,7 @@ function graphemes(text: string): string[] {
 
 const copy = {
   en: {
-    brand: "MediKiosk",
+    brand: "ayuvaani",
     tagline: "Outpatient clinical history",
     language: "Language",
     ayush: "Include AYUSH history",
@@ -115,14 +178,14 @@ const copy = {
     ready: "Ready",
     preparing: "Preparing question…",
     triage: "Priority alert sent to triage",
-    done: "History recorded. Please wait for staff.",
+    done: "History recorded. Next: scan any old papers (or skip).",
     doneTitle: "Interview complete",
-    restart: "New patient",
+    restart: "Continue to documents",
     profileHint: "Live chart",
     bodyHint: "Anatomy",
   },
   hi: {
-    brand: "MediKiosk",
+    brand: "ayuvaani",
     tagline: "OPD नैदानिक इतिहास",
     language: "भाषा",
     ayush: "आयुष इतिहास शामिल करें",
@@ -133,14 +196,14 @@ const copy = {
     ready: "तैयार",
     preparing: "प्रश्न तैयार हो रहा है…",
     triage: "आपातकालीन अलर्ट भेज दिया गया",
-    done: "इतिहास दर्ज हो गया। कृपया स्टाफ से मिलें।",
+    done: "इतिहास दर्ज हो गया। आगे: पुराने कागज़ात स्कैन करें (या छोड़ें)।",
     doneTitle: "साक्षात्कार पूर्ण",
-    restart: "नया मरीज़",
+    restart: "कागज़ात पर जाएँ",
     profileHint: "लाइव चार्ट",
     bodyHint: "शरीर",
   },
   hinglish: {
-    brand: "MediKiosk",
+    brand: "ayuvaani",
     tagline: "OPD clinical history",
     language: "Language",
     ayush: "AYUSH history include karein",
@@ -151,9 +214,9 @@ const copy = {
     ready: "Ready",
     preparing: "Question prepare ho raha hai…",
     triage: "Emergency alert bhej diya",
-    done: "History record ho gayi. Staff se milen.",
+    done: "History save ho gayi. Ab papers scan karein ya skip karein.",
     doneTitle: "Interview complete",
-    restart: "Naya patient",
+    restart: "Documents par jao",
     profileHint: "Live chart",
     bodyHint: "Body map",
   },
@@ -165,6 +228,17 @@ export default function App() {
 
   const [language, setLanguage] = useState<Language>("hi");
   const [ayushMode, setAyushMode] = useState(false);
+  const [sessionStep, setSessionStep] = useState<SessionStep>("welcome");
+  const [encounterId, setEncounterId] = useState<string | null>(null);
+  const [patientId, setPatientId] = useState<string | null>(null);
+  const [abhaId, setAbhaId] = useState("");
+  const [flowBusy, setFlowBusy] = useState(false);
+  const [consentScopes, setConsentScopes] = useState<ConsentScopes>({
+    history_capture: true,
+    document_scan: true,
+    share_with_doctor: true,
+    follow_up_contact: true,
+  });
   const [touch, setTouch] = useState<TouchPrompt>({ question: "", options: [] });
   const [fields, setFields] = useState<HistoryEntry[]>([]);
   const [activeRegions, setActiveRegions] = useState<BodyRegionId[]>([]);
@@ -193,6 +267,9 @@ export default function App() {
     samples: 0,
   });
 
+  const encounterIdRef = useRef<string | null>(null);
+  encounterIdRef.current = encounterId;
+
   const completeRef = useRef(false);
   const endingRef = useRef(false);
   const wrapUpAudioRef = useRef(false);
@@ -202,6 +279,16 @@ export default function App() {
   const displayRef = useRef("");
   const userStoppedAtRef = useRef<number | null>(null);
   const turnSamplesRef = useRef<number[]>([]);
+  /** Hold on-screen caption until bot audio is actually playing. */
+  const pendingCaptionRef = useRef("");
+  const holdCaptionUntilSpeechRef = useRef(false);
+  const botSpeakingRef = useRef(false);
+  const speechSyncRef = useRef<{
+    startMs: number;
+    durationMs: number;
+    parts: string[];
+  } | null>(null);
+  const captionReleaseTimerRef = useRef<number | null>(null);
 
   const t = copy[language];
   const isConnected = transportState === "ready";
@@ -240,6 +327,36 @@ export default function App() {
     }
   }, []);
 
+  const clearCaptionReleaseTimer = useCallback(() => {
+    if (captionReleaseTimerRef.current != null) {
+      window.clearTimeout(captionReleaseTimerRef.current);
+      captionReleaseTimerRef.current = null;
+    }
+  }, []);
+
+  /** Start typewriter paced to estimated speech length (keeps text from racing ahead of voice). */
+  const releaseCaptionWithSpeech = useCallback(
+    (caption: string) => {
+      const cleaned = dedupePatientText(caption);
+      if (!cleaned) return;
+      clearCaptionReleaseTimer();
+      holdCaptionUntilSpeechRef.current = false;
+      pendingCaptionRef.current = cleaned;
+      const parts = graphemes(cleaned);
+      // ~13 chars/sec spoken + small buffer so text never finishes before audio.
+      const durationMs = Math.max(2200, Math.round(parts.length * 95));
+      speechSyncRef.current = {
+        startMs: performance.now(),
+        durationMs,
+        parts,
+      };
+      streamBufRef.current = cleaned;
+      setTarget(cleaned, true);
+      setRevealOptions(true);
+    },
+    [clearCaptionReleaseTimer, setTarget],
+  );
+
   const beginBotTurn = useCallback(() => {
     if (completeRef.current) return;
     streamBufRef.current = "";
@@ -257,7 +374,109 @@ export default function App() {
     } catch {
       /* ignore */
     }
+    const id = encounterIdRef.current;
+    if (id) {
+      try {
+        await setEncounterStep(id, "scan");
+      } catch {
+        /* ignore */
+      }
+    }
+    setSessionStep("scan");
+    setComplete(false);
+    completeRef.current = false;
+    endingRef.current = false;
   }, [client, clearEndTimer]);
+
+  const advanceStep = useCallback(
+    async (step: SessionStep) => {
+      setError(null);
+      const id = encounterIdRef.current;
+      if (id) {
+        try {
+          await setEncounterStep(id, step);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Failed to update step");
+          return;
+        }
+      }
+      setSessionStep(step);
+    },
+    [],
+  );
+
+  const startEncounter = useCallback(async () => {
+    setFlowBusy(true);
+    setError(null);
+    try {
+      const enc = await createEncounter({
+        language,
+        ayush_mode: ayushMode,
+      });
+      setEncounterId(enc.id);
+      encounterIdRef.current = enc.id;
+      await setEncounterStep(enc.id, "identify");
+      setSessionStep("identify");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start encounter");
+    } finally {
+      setFlowBusy(false);
+    }
+  }, [language, ayushMode]);
+
+  const handleIdentify = useCallback(
+    async (guest: boolean) => {
+      if (!encounterId) return;
+      setFlowBusy(true);
+      setError(null);
+      try {
+        const res = await identifyEncounter(
+          encounterId,
+          guest
+            ? { guest: true, display_name: "Guest Patient" }
+            : { abha_id: abhaId },
+        );
+        if (res.patientId) setPatientId(res.patientId);
+        await setEncounterStep(encounterId, "consent");
+        setSessionStep("consent");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Identify failed");
+      } finally {
+        setFlowBusy(false);
+      }
+    },
+    [encounterId, abhaId],
+  );
+
+  const handleConsent = useCallback(async () => {
+    if (!encounterId) return;
+    setFlowBusy(true);
+    setError(null);
+    try {
+      await grantConsent(encounterId, consentScopes);
+      await setEncounterStep(encounterId, "history");
+      setSessionStep("history");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Consent failed");
+    } finally {
+      setFlowBusy(false);
+    }
+  }, [encounterId, consentScopes]);
+
+  const resetFlow = useCallback(() => {
+    setSessionStep("welcome");
+    setEncounterId(null);
+    encounterIdRef.current = null;
+    setPatientId(null);
+    setAbhaId("");
+    setFields([]);
+    setActiveRegions([]);
+    setActiveSystems([]);
+    setRedFlag(null);
+    setComplete(false);
+    setDoneSummary("");
+    setError(null);
+  }, []);
 
   const scheduleEnd = useCallback(
     (ms: number) => {
@@ -272,9 +491,15 @@ export default function App() {
   useEffect(() => {
     if (displayText === targetText) {
       setTyping(false);
+      speechSyncRef.current = null;
       if (touch.options.length > 0 && targetText) {
         setRevealOptions(true);
       }
+      return;
+    }
+
+    if (!targetText) {
+      setTyping(false);
       return;
     }
 
@@ -288,11 +513,20 @@ export default function App() {
       return;
     }
 
+    const sync = speechSyncRef.current;
+    let delay = 62;
+    if (sync && sync.parts.length > 1) {
+      const elapsed = performance.now() - sync.startMs;
+      const progress = (shownParts.length + 1) / sync.parts.length;
+      const ideal = sync.durationMs * progress;
+      delay = Math.max(16, Math.round(ideal - elapsed));
+    }
+
     const timer = window.setTimeout(() => {
       const next = targetParts.slice(0, shownParts.length + 1).join("");
       displayRef.current = next;
       setDisplayText(next);
-    }, 62);
+    }, delay);
     return () => window.clearTimeout(timer);
   }, [displayText, targetText, touch.options.length]);
 
@@ -398,6 +632,11 @@ export default function App() {
         const chunk = data?.text ?? "";
         if (!chunk) return;
         streamBufRef.current += chunk;
+        // While holding for audio, only buffer — never paint early.
+        if (holdCaptionUntilSpeechRef.current) {
+          pendingCaptionRef.current = cleanPatientText(streamBufRef.current);
+          return;
+        }
         setTarget(streamBufRef.current, false);
       },
       [setTarget],
@@ -410,6 +649,8 @@ export default function App() {
       (data: { text?: string }) => {
         const chunk = data?.text ?? "";
         if (!chunk) return;
+        // Prefer the fixed pending caption; don't let TTS tokens paint early.
+        if (holdCaptionUntilSpeechRef.current) return;
         if (streamBufRef.current.length > 8) return;
         streamBufRef.current =
           `${streamBufRef.current}${streamBufRef.current ? " " : ""}${chunk}`.trim();
@@ -423,6 +664,7 @@ export default function App() {
     RTVIEvent.BotStartedSpeaking,
     useCallback(() => {
       setBotSpeaking(true);
+      botSpeakingRef.current = true;
       if (userStoppedAtRef.current != null) {
         const ms = Math.round(performance.now() - userStoppedAtRef.current);
         userStoppedAtRef.current = null;
@@ -437,20 +679,40 @@ export default function App() {
           samples: samples.length,
         });
       }
+      // Wait for WebRTC jitter buffer before revealing text, then pace typewriter to speech.
+      if (holdCaptionUntilSpeechRef.current && pendingCaptionRef.current) {
+        clearCaptionReleaseTimer();
+        captionReleaseTimerRef.current = window.setTimeout(() => {
+          captionReleaseTimerRef.current = null;
+          if (pendingCaptionRef.current) {
+            releaseCaptionWithSpeech(pendingCaptionRef.current);
+          }
+        }, 280);
+      }
       if (!completeRef.current) return;
       wrapUpAudioRef.current = true;
       clearEndTimer();
-    }, [clearEndTimer]),
+    }, [clearEndTimer, clearCaptionReleaseTimer, releaseCaptionWithSpeech]),
   );
 
   useRTVIClientEvent(
     RTVIEvent.BotStoppedSpeaking,
     useCallback(() => {
       setBotSpeaking(false);
+      botSpeakingRef.current = false;
+      clearCaptionReleaseTimer();
+      speechSyncRef.current = null;
+      // Snap any remaining typewriter to full caption once speech ends.
+      if (targetRef.current) {
+        displayRef.current = targetRef.current;
+        setDisplayText(targetRef.current);
+        setTyping(false);
+        setRevealOptions(true);
+      }
       if (!completeRef.current) return;
       if (!wrapUpAudioRef.current) return;
       scheduleEnd(3200);
-    }, [scheduleEnd]),
+    }, [scheduleEnd, clearCaptionReleaseTimer]),
   );
 
   useRTVIClientEvent(
@@ -470,17 +732,19 @@ export default function App() {
             options,
             section: data.section ? String(data.section) : undefined,
           });
-          setRevealOptions(false);
+          setRevealOptions(options.length > 0);
           if (question) {
-            if (
-              !streamBufRef.current ||
-              question.length >= streamBufRef.current.length
-            ) {
+            pendingCaptionRef.current = question;
+            // Never paint the question before audio — keep holding for speech sync.
+            if (!botSpeakingRef.current) {
+              holdCaptionUntilSpeechRef.current = true;
+              streamBufRef.current = "";
+            } else {
+              holdCaptionUntilSpeechRef.current = false;
               streamBufRef.current = question;
-              setTarget(question, !displayRef.current);
+              releaseCaptionWithSpeech(question);
             }
           }
-          if (!options.length) setRevealOptions(false);
         } else if (type === "history_update") {
           if (Array.isArray(data.fields)) {
             setFields(data.fields as HistoryEntry[]);
@@ -488,6 +752,18 @@ export default function App() {
           const entry = data.entry as HistoryEntry & { body_regions?: string[] };
           if (entry?.value) {
             absorbClinical(String(entry.value), entry.body_regions);
+            const eid = encounterIdRef.current;
+            if (eid && entry.field) {
+              void upsertHistoryField(eid, {
+                section: String(entry.section || "hpi"),
+                field: String(entry.field),
+                value: String(entry.value),
+                body_regions: entry.body_regions || [],
+                source: "voice",
+              }).catch(() => {
+                /* persistence best-effort during live interview */
+              });
+            }
           }
         } else if (type === "red_flag") {
           setRedFlag({
@@ -520,13 +796,44 @@ export default function App() {
           }
         }
       },
-      [setTarget, scheduleEnd, absorbClinical],
+      [releaseCaptionWithSpeech, scheduleEnd, absorbClinical],
     ),
   );
 
   useEffect(() => {
     return () => clearEndTimer();
   }, [clearEndTimer]);
+
+  useEffect(() => {
+    if (sessionStep !== "history") return;
+    if (isConnected || isConnecting) return;
+    stopSpeaking();
+    void handleConnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionStep]);
+
+  // Hydrate right-panel history from DB if this encounter already has rows.
+  useEffect(() => {
+    if (sessionStep !== "history" || !encounterId) return;
+    let cancelled = false;
+    void getEncounterHistory(encounterId)
+      .then((res) => {
+        if (cancelled || !Array.isArray(res.fields) || !res.fields.length) return;
+        setFields(
+          res.fields.map((f) => ({
+            section: String(f.section || ""),
+            field: String(f.field || ""),
+            value: String(f.value || ""),
+          })),
+        );
+      })
+      .catch(() => {
+        /* optional hydrate */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionStep, encounterId]);
 
   const handleConnect = async () => {
     if (!client) return;
@@ -546,13 +853,20 @@ export default function App() {
     setClientMetrics([]);
     turnSamplesRef.current = [];
     setTurnTiming({ lastTurnMs: null, avgTurnMs: null, samples: 0 });
-    setTouch({ question: "", options: [] });
+    // Seed tap choices only — question text waits for bot audio (speech-synced).
+    const seed = firstChiefPrompt(language);
+    setTouch(seed);
     setUserHearing(false);
     setBotSpeaking(false);
+    botSpeakingRef.current = false;
+    pendingCaptionRef.current = seed.question;
+    holdCaptionUntilSpeechRef.current = true;
     streamBufRef.current = "";
+    speechSyncRef.current = null;
+    clearCaptionReleaseTimer();
     setTarget("", true);
     setTyping(false);
-    setRevealOptions(false);
+    setRevealOptions(true);
 
     try {
       if (transportState !== "disconnected") {
@@ -593,29 +907,36 @@ export default function App() {
   const handleTap = (label: string) => {
     if (!client) return;
     absorbClinical(label);
-    client.sendClientMessage("touch_answer", { label });
-    setTouch((prev) => ({ ...prev, options: [] }));
-    setRevealOptions(false);
-  };
-
-  const handleBodySelect = (region: BodyRegionId) => {
-    if (!client || complete) return;
-    const label =
-      language === "hi"
-        ? {
-            head: "सिर",
-            neck: "गर्दन",
-            chest: "छाती",
-            abdomen: "पेट",
-            pelvis: "कमर",
-            left_arm: "बायाँ हाथ",
-            right_arm: "दायाँ हाथ",
-            left_leg: "बायाँ पैर",
-            right_leg: "दायाँ पैर",
-            back: "पीठ",
-          }[region]
-        : region.replace("_", " ");
-    setActiveRegions((prev) => mergeRegions(prev, [region]));
+    const section = touch.section || "chief_complaint";
+    const field =
+      section === "chief_complaint" ? "chief_complaint" : section || "note";
+    const entry: HistoryEntry = {
+      section,
+      field,
+      value: label,
+    };
+    setFields((prev) => {
+      const withoutDup = prev.filter(
+        (e) =>
+          !(
+            (e.section || "").toLowerCase() === section.toLowerCase() &&
+            (e.field || "").toLowerCase() === field.toLowerCase() &&
+            (e.value || "") === label
+          ),
+      );
+      return [...withoutDup, entry];
+    });
+    const eid = encounterIdRef.current;
+    if (eid) {
+      void upsertHistoryField(eid, {
+        section,
+        field,
+        value: label,
+        source: "touch",
+      }).catch(() => {
+        /* best-effort */
+      });
+    }
     client.sendClientMessage("touch_answer", { label });
     setTouch((prev) => ({ ...prev, options: [] }));
     setRevealOptions(false);
@@ -632,342 +953,194 @@ export default function App() {
           ? t.ready
           : t.preparing;
 
-  const HISTORY_STEPS =
-    language === "hi"
-      ? [
-          { id: "chief_complaint", label: "शिकायत" },
-          { id: "hpi", label: "HPI" },
-          { id: "past_medical_surgical", label: "पुराना" },
-          { id: "drug_allergy", label: "दवा" },
-          { id: "family_history", label: "परिवार" },
-          { id: "review_of_systems", label: "ROS" },
-        ]
-      : [
-          { id: "chief_complaint", label: "Complaint" },
-          { id: "hpi", label: "HPI" },
-          { id: "past_medical_surgical", label: "Past" },
-          { id: "drug_allergy", label: "Meds" },
-          { id: "family_history", label: "Family" },
-          { id: "review_of_systems", label: "ROS" },
-        ];
-
+  const HISTORY_STEP_COUNT = 6;
   const capturedSections = new Set(
     fields.map((f) => (f.section || "").toLowerCase()).filter(Boolean),
   );
-  const activeStep =
-    touch.section ||
-    fields[fields.length - 1]?.section ||
-    "chief_complaint";
   const progress = Math.min(
     100,
-    Math.round((capturedSections.size / HISTORY_STEPS.length) * 100) ||
+    Math.round((capturedSections.size / HISTORY_STEP_COUNT) * 100) ||
       (fields.length ? Math.min(90, fields.length * 12) : 0) ||
       (complete ? 100 : 8),
   );
 
-  const sessionDate = new Date().toLocaleDateString(
-    language === "hi" ? "hi-IN" : "en-IN",
-    { day: "numeric", month: "short", year: "numeric" },
-  );
+  const tokenNo = (() => {
+    if (!encounterId) return "—";
+    const digits = encounterId.replace(/\D/g, "");
+    const n = Number.parseInt(digits.slice(-4) || "100", 10);
+    return String((n % 900) + 100).padStart(3, "0");
+  })();
 
   const aiHint = userHearing
     ? language === "hi"
       ? "सुन रहा हूँ…"
       : "Listening…"
-    : botSpeaking || typing
+    : touch.options.length > 0 && !botSpeaking
       ? language === "hi"
-        ? "विश्लेषण कर रहा हूँ…"
-        : "Analyzing…"
-      : language === "hi"
-        ? "बोलें या छूकर चुनें"
-        : "Speak or tap";
+        ? "बोलें या नीचे चुनें"
+        : "Speak or tap below"
+      : botSpeaking || typing
+        ? language === "hi"
+          ? "जवाब तैयार हो रहा है…"
+          : "Getting the next question…"
+        : language === "hi"
+          ? "बोलें या छूकर चुनें"
+          : "Speak or tap";
 
   return (
-    <div className={`app ${isConnected ? "app-clinic" : ""}`}>
+    <div
+      className={`app ${isConnected || sessionStep === "history" ? "app-clinic" : ""}`}
+    >
       <div className="glow" aria-hidden />
       <div className="grid" aria-hidden />
 
-      {!isConnected && (
-        <>
-          <header className="topbar">
-            <div className="brand">
-              <span className="brand-mark" aria-hidden />
-              <span className="brand-name">{t.brand}</span>
-        </div>
-          </header>
-          <main className="landing">
-            <p className="eyebrow">{t.tagline}</p>
-            <h1 className="hero-brand">{t.brand}</h1>
-            <p className="hero-sub">
-              {language === "hi"
-                ? "अस्पताल OPD के लिए शांत नैदानिक इतिहास साक्षात्कार।"
-                : language === "hinglish"
-                  ? "Hospital OPD ke liye calm clinical history interview."
-                  : "A calm clinical history interview for hospital OPD."}
-            </p>
+      {!isConnected && sessionStep !== "history" && (
+        <div className="flow-shell">
+          <FlowAmbience>
+          {sessionStep === "welcome" && (
+            <WelcomeScreen
+              step={sessionStep}
+              language={language}
+              setLanguage={setLanguage}
+              ayushMode={ayushMode}
+              setAyushMode={setAyushMode}
+              onContinue={() => void startEncounter()}
+              busy={flowBusy}
+              error={error}
+            />
+          )}
 
-            <div className="orb-wrap landing-orb">
-              <div className="orb mesh" aria-hidden />
-              <div className="mic-icon" aria-hidden>
-                <svg viewBox="0 0 24 24" width="26" height="26" fill="none">
-                  <path
-                    d="M12 3a3 3 0 0 0-3 3v6a3 3 0 1 0 6 0V6a3 3 0 0 0-3-3Z"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                  />
-                  <path
-                    d="M5 11a7 7 0 0 0 14 0M12 18v3"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </div>
-            </div>
+          {sessionStep === "identify" && (
+            <IdentifyScreen
+              step={sessionStep}
+              language={language}
+              setLanguage={setLanguage}
+              abhaId={abhaId}
+              setAbhaId={setAbhaId}
+              onVerify={() => void handleIdentify(false)}
+              onGuest={() => void handleIdentify(true)}
+              busy={flowBusy}
+              error={error}
+            />
+          )}
 
-            <div className="setup">
-              <p className="label">{t.language}</p>
-              <div className="lang-row">
-                {(
-                  [
-                    ["hi", "हिन्दी"],
-                    ["en", "English"],
-                    ["hinglish", "Hinglish"],
-                  ] as const
-                ).map(([code, label]) => (
-                  <button
-                    key={code}
-                    type="button"
-                    className={language === code ? "chip on" : "chip"}
-                    onClick={() => setLanguage(code)}
-                  >
-                    {label}
-                  </button>
-                ))}
+          {sessionStep === "consent" && (
+            <ConsentScreen
+              step={sessionStep}
+              language={language}
+              setLanguage={setLanguage}
+              scopes={consentScopes}
+              setScopes={setConsentScopes}
+              onGrant={() => void handleConsent()}
+              busy={flowBusy}
+              error={error}
+            />
+          )}
+
+          {sessionStep === "scan" && (
+            <ScanScreen
+              step={sessionStep}
+              language={language}
+              setLanguage={setLanguage}
+              patientId={patientId}
+              encounterId={encounterId}
+              onContinue={() => void advanceStep("summary")}
+              onSkip={() => void advanceStep("summary")}
+            />
+          )}
+
+          {sessionStep === "summary" && (
+            <SummaryScreen
+              step={sessionStep}
+              language={language}
+              setLanguage={setLanguage}
+              encounterId={encounterId}
+              onConfirm={() => setSessionStep("submit")}
+            />
+          )}
+
+          {sessionStep === "submit" && (
+            <StubStepScreen
+              step={sessionStep}
+              language={language}
+              setLanguage={setLanguage}
+              titleHi="डॉक्टर के पास भेजें?"
+              titleEn="Send this to the doctor?"
+              bodyHi="आपका सत्र सुरक्षित जमा हो जाएगा।"
+              bodyEn="Your session will be saved securely."
+              primaryHi="हाँ, भेजें"
+              primaryEn="Yes, submit"
+              onPrimary={() => {
+                if (!encounterId) {
+                  setSessionStep("done");
+                  return;
+                }
+                setFlowBusy(true);
+                void submitEncounter(encounterId)
+                  .then(() => setSessionStep("done"))
+                  .catch((e) => {
+                    setError(
+                      e instanceof Error ? e.message : "Submit failed",
+                    );
+                  })
+                  .finally(() => setFlowBusy(false));
+              }}
+              art="docs"
+            />
+          )}
+
+          {sessionStep === "done" && (
+            <StubStepScreen
+              step={sessionStep}
+              language={language}
+              setLanguage={setLanguage}
+              titleHi="हो गया — धन्यवाद"
+              titleEn="All done — thank you"
+              bodyHi="कृपया प्रतीक्षा करें या टोकन लें।"
+              bodyEn="Please wait or take your token."
+              primaryHi="नया मरीज़"
+              primaryEn="New patient"
+              onPrimary={resetFlow}
+              art="done"
+            />
+          )}
+          </FlowAmbience>
         </div>
-              <label className="ayush">
-                <input
-                  type="checkbox"
-                  checked={ayushMode}
-                  onChange={(e) => setAyushMode(e.target.checked)}
-                />
-                <span>{t.ayush}</span>
-              </label>
-        <button
-          type="button"
-                className="btn solid wide"
-                onClick={handleConnect}
-                disabled={isConnecting}
-        >
-                {isConnecting ? t.connecting : t.start}
-        </button>
-              {error && <p className="error">{error}</p>}
-            </div>
-          </main>
-        </>
       )}
 
-      {isConnected && (
-        <div className="hospital">
-          <aside className="h-nav">
-            <div className="h-brand">
-              <span className="brand-mark" aria-hidden />
-              <div>
-                <strong>MediKiosk</strong>
-                <em>OPD History</em>
-              </div>
-        </div>
-
-            <nav className="h-steps" aria-label="History sections">
-              {HISTORY_STEPS.map((step) => {
-                const done = capturedSections.has(step.id);
-                const current =
-                  String(activeStep).toLowerCase() === step.id ||
-                  (step.id === "hpi" &&
-                    String(activeStep).toLowerCase() === "hpi");
-                return (
-                  <div
-                    key={step.id}
-                    className={`h-step ${done ? "done" : ""} ${current ? "current" : ""}`}
-                  >
-                    <span className="h-dot" />
-                    <span>{step.label}</span>
-                  </div>
-                );
-              })}
-            </nav>
-
-            <div className="h-nav-foot">
-              <MetricsPanel
-                variant="inline"
-                metrics={metrics}
-                turn={turnTiming}
-                evalReport={sessionEval}
-                clientMetrics={clientMetrics}
-              />
-            </div>
-          </aside>
-
-          <div className="h-main">
-            <header className="h-top">
-              <div className="h-search" aria-hidden>
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
-                  <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.7" />
-                  <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-                </svg>
-                <span>
-                  {language === "hi"
-                    ? "मरीज़ इतिहास · लाइव सत्र"
-                    : "Patient history · live session"}
-                </span>
-              </div>
-              <div className="h-top-actions">
-                <span className="h-date">{sessionDate}</span>
-                {!complete ? (
-                  <button type="button" className="btn ghost sm" onClick={handleDisconnect}>
-                    {t.stop}
-                  </button>
-                ) : null}
-                <button type="button" className="btn solid sm" disabled>
-                  {language === "hi" ? "रिपोर्ट" : "Report"}
-                </button>
-              </div>
-            </header>
-
-            {redFlag && (
-              <div className="alert" role="alert">
-                {t.triage}
-              </div>
-            )}
-
-            <div className="h-grid">
-              <section className="h-center body-upper">
-                <div className="anatomy-strip">
-                  <AnatomyPanel
-                    active={activeRegions}
-                    systems={activeSystems}
-                    language={language}
-                    progress={complete ? 100 : progress}
-                    onSelect={complete ? undefined : handleBodySelect}
-                  />
-                </div>
-
-                <div
-                  className={`voice-stage ${complete ? "done" : ""} ${userHearing ? "hearing" : ""} ${botSpeaking ? "speaking" : ""} ${typing ? "thinking" : ""}`}
-                >
-                  {complete ? (
-                    <div className="voice-complete">
-                      <div className="voice-orb done" aria-hidden>
-                        <span className="orb-core">
-                          <svg viewBox="0 0 24 24" width="28" height="28" fill="none">
-                            <path
-                              d="M5 12.5 10 17.5 19 7.5"
-                              stroke="currentColor"
-                              strokeWidth="2.2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                </svg>
-                        </span>
-                      </div>
-                      <h2 className="voice-caption">
-                        {displayText || doneSummary || t.done}
-                      </h2>
-                      <button
-                        type="button"
-                        className="btn solid"
-                        onClick={() => void endSession()}
-                      >
-                        {t.restart}
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="ai-dock-label">MediKiosk AI</p>
-                      <div className="voice-row">
-                        <div className="voice-orb-wrap">
-                          <div className="voice-orb" aria-hidden>
-                            <span className="orb-ring r1" />
-                            <span className="orb-ring r2" />
-                            <span className="orb-ring r3" />
-                            <span className="orb-core">
-                              {userHearing ? (
-                                <span className="wave-bars">
-                                  <i />
-                                  <i />
-                                  <i />
-                                  <i />
-                                  <i />
-                                </span>
-                              ) : (
-                                <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-                                  <path
-                                    d="M12 3a3 3 0 0 0-3 3v6a3 3 0 1 0 6 0V6a3 3 0 0 0-3-3Z"
-                                    stroke="currentColor"
-                                    strokeWidth="1.8"
-                                  />
-                                  <path
-                                    d="M5 11a7 7 0 0 0 14 0M12 18v3"
-                                    stroke="currentColor"
-                                    strokeWidth="1.8"
-                                    strokeLinecap="round"
-                                  />
-                </svg>
-                              )}
-                            </span>
-                          </div>
-                          <p className="voice-state">{sessionStatus}</p>
-                        </div>
-
-                        <div className="voice-copy">
-                          <p className="ai-dock-status">{aiHint}</p>
-                          <h2
-                            className={`voice-caption ${displayText ? "" : "empty"}`}
-                            aria-live="polite"
-                          >
-                            {displayText ? (
-                              <>
-                                <span>{displayText}</span>
-                                {showCaret && <span className="caret" aria-hidden />}
-                              </>
-                            ) : (
-                              <span className="placeholder">···</span>
-                            )}
-                          </h2>
-
-                          {revealOptions && touch.options.length > 0 && (
-                            <div className="quick-replies" role="list">
-                              {touch.options.map((opt, i) => (
-                                <button
-                                  key={opt}
-                                  type="button"
-                                  className="quick-chip option-in"
-                                  style={{ animationDelay: `${i * 40}ms` }}
-                                  onClick={() => handleTap(opt)}
-                                >
-                                  {opt}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </>
-                  )}
-        </div>
-      </section>
-
-              <ClinicalChart
-                entries={fields}
-                regions={activeRegions}
-                systems={activeSystems}
-                language={language}
-                progress={complete ? 100 : progress}
-                complete={complete}
-              />
-            </div>
-          </div>
-        </div>
+      {(isConnected || sessionStep === "history") && (
+        <InterviewScene
+          language={language}
+          tokenNo={tokenNo}
+          progress={complete ? 100 : progress}
+          complete={complete}
+          fields={fields}
+          activeRegions={activeRegions}
+          activeSystems={activeSystems}
+          alertText={
+            redFlag
+              ? language === "hi"
+                ? "आपातकालीन संकेत — कृपया स्टाफ़ को बुलाएँ।"
+                : "Urgent symptoms flagged — please call staff."
+              : null
+          }
+          displayText={displayText}
+          showCaret={showCaret}
+          aiHint={aiHint}
+          sessionStatus={sessionStatus}
+          userHearing={userHearing}
+          botSpeaking={botSpeaking}
+          typing={typing}
+          options={touch.options}
+          revealOptions={revealOptions}
+          doneSummary={doneSummary}
+          doneLabel={t.done}
+          continueLabel={t.restart}
+          stopLabel={t.stop}
+          onTap={handleTap}
+          onStop={() => void handleDisconnect()}
+          onContinue={() => void endSession()}
+        />
       )}
 
       {!isConnected && (

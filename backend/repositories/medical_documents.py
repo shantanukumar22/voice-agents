@@ -37,36 +37,69 @@ class MedicalDocumentRepository:
                 "SELECT 1 FROM patients WHERE id = %s", (patient_id,)
             ).fetchone() is not None
 
-    def create(self, patient_id: str, document: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    def create(
+        self,
+        patient_id: str,
+        document: dict[str, Any],
+        encounter_id: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
         ocr_document_id = UUID(document["document_id"])
+        encounter_uuid = UUID(encounter_id) if encounter_id else None
         with self.pool.connection() as connection, connection.transaction():
             if connection.execute(
                 "SELECT 1 FROM patients WHERE id = %s", (patient_id,)
             ).fetchone() is None:
                 raise PatientNotFoundError(patient_id)
+            if encounter_uuid is not None and connection.execute(
+                "SELECT 1 FROM encounters WHERE id = %s", (encounter_uuid,)
+            ).fetchone() is None:
+                raise LookupError(f"Encounter not found: {encounter_id}")
             row = connection.execute(
                 """INSERT INTO medical_documents(
-                   id, patient_id, ocr_document_id, document_type,
+                   id, patient_id, encounter_id, ocr_document_id, document_type,
                    extraction_timestamp, clinical_document_date, confidence_score,
                    structured_data, extraction_errors, complete_ocr_result,
                    original_file_reference
-                   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                   ON CONFLICT(patient_id, ocr_document_id) DO NOTHING RETURNING *""",
+                   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT(patient_id, ocr_document_id) DO UPDATE SET
+                     encounter_id = COALESCE(EXCLUDED.encounter_id, medical_documents.encounter_id),
+                     updated_at = CURRENT_TIMESTAMP
+                   RETURNING *, (xmax = 0) AS inserted""",
                 (
-                    uuid4(), patient_id, ocr_document_id, document["document_type"],
+                    uuid4(), patient_id, encounter_uuid, ocr_document_id, document["document_type"],
                     document["extraction_timestamp"], document.get("clinical_document_date"),
                     document["confidence_score"], Jsonb(document["data"]),
                     Jsonb(document["extraction_errors"]), Jsonb(document["complete_ocr_result"]),
                     document.get("original_file_reference"),
                 ),
             ).fetchone()
-            created = row is not None
+            created = bool(row["inserted"]) if row else False
             if row is None:
                 row = connection.execute(
                     "SELECT * FROM medical_documents WHERE patient_id=%s AND ocr_document_id=%s",
                     (patient_id, ocr_document_id),
                 ).fetchone()
+            else:
+                row = {k: v for k, v in dict(row).items() if k != "inserted"}
         return self._serialize(row), created
+
+    def list_for_encounter(
+        self, encounter_id: str, *, verify_exists: bool = True
+    ) -> list[dict[str, Any]]:
+        with self.pool.connection() as connection:
+            if verify_exists and connection.execute(
+                "SELECT 1 FROM encounters WHERE id = %s", (encounter_id,)
+            ).fetchone() is None:
+                raise LookupError(f"Encounter not found: {encounter_id}")
+            rows = connection.execute(
+                """SELECT * FROM medical_documents
+                   WHERE encounter_id = %s
+                   ORDER BY COALESCE(clinical_document_date::timestamptz,
+                                     extraction_timestamp, created_at) DESC,
+                            created_at DESC""",
+                (encounter_id,),
+            ).fetchall()
+        return [self._serialize(row) for row in rows]
 
     def list_for_patient(self, patient_id: str, document_type: str | None = None) -> list[dict[str, Any]]:
         with self.pool.connection() as connection:
@@ -139,8 +172,9 @@ class MedicalDocumentRepository:
     @staticmethod
     def _serialize(row: dict[str, Any]) -> dict[str, Any]:
         result = dict(row)
-        for key in ("id", "ocr_document_id"):
-            result[key] = str(result[key])
+        for key in ("id", "ocr_document_id", "encounter_id"):
+            if result.get(key) is not None:
+                result[key] = str(result[key])
         for key in ("extraction_timestamp", "clinical_document_date", "created_at", "updated_at", "indexed_at"):
             if result.get(key) is not None:
                 result[key] = result[key].isoformat() if hasattr(result[key], "isoformat") else str(result[key])

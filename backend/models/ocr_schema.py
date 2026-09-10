@@ -51,7 +51,52 @@ def normalize_ocr_result(result: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     document_type = str(result.get("document_type", "unknown")).lower().replace(" ", "_")
-    if document_type == "lab_report":
+    # Keep in sync with patient_history.DOCUMENT_TYPE_ALIASES so OCR never
+    # persists a type the history layer will reject.
+    aliases = {
+        "lab_report": "laboratory_report",
+        "lab": "laboratory_report",
+        "laboratory": "laboratory_report",
+        "labs": "laboratory_report",
+        "blood_report": "laboratory_report",
+        "blood_test": "laboratory_report",
+        "pathology": "laboratory_report",
+        "pathology_report": "laboratory_report",
+        "test_report": "laboratory_report",
+        "report": "laboratory_report",
+        "rx": "prescription",
+        "medicine": "prescription",
+        "medication": "prescription",
+        "medications": "prescription",
+        "opd_slip": "prescription",
+        "opd": "prescription",
+        "script": "prescription",
+        "discharge": "discharge_summary",
+        "discharge_note": "discharge_summary",
+        "clinical_note": "discharge_summary",
+        "clinical_notes": "discharge_summary",
+        "progress_note": "discharge_summary",
+        "imaging": "imaging_report",
+        "radiology": "imaging_report",
+        "radiology_report": "imaging_report",
+        "xray": "imaging_report",
+        "x_ray": "imaging_report",
+        "ct": "imaging_report",
+        "mri": "imaging_report",
+        "ultrasound": "imaging_report",
+        "usg": "imaging_report",
+        "unknown": "laboratory_report",
+        "other": "laboratory_report",
+        "medical_document": "laboratory_report",
+        "identity_proof": "laboratory_report",
+    }
+    document_type = aliases.get(document_type, document_type)
+    if document_type not in {
+        "prescription",
+        "laboratory_report",
+        "discharge_summary",
+        "imaging_report",
+    }:
         document_type = "laboratory_report"
     envelope = OCRStructuredDocument(
         document_type=document_type,

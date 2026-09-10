@@ -345,7 +345,7 @@ export default function AnatomyPanel({
         <div>
           <p className="facility">
             {facilityLabel ||
-              (lang === "hi" ? "अस्पताल OPD · MediKiosk" : "Hospital OPD · MediKiosk")}
+              (lang === "hi" ? "अस्पताल OPD · आयुवाणी" : "Hospital OPD · ayuvaani")}
           </p>
           <span className="status-dot">
             {lang === "hi" ? "सामान्य सत्र" : "Session normal"}

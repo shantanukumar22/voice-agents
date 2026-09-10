@@ -76,7 +76,12 @@ class OCREngine:
         prompt = (
             "You are a world-class Medical Document AI specialized in Indian healthcare records. "
             "Analyze this image and extract a comprehensive clinical summary as a JSON object. "
-            "1. Identify 'document_type': (prescription, lab_report, discharge_summary, clinical_note, identity_proof, or unknown). "
+            "1. Identify 'document_type' as exactly one of: "
+            "prescription, laboratory_report, discharge_summary, imaging_report. "
+            "Use laboratory_report for blood/lab/pathology/test reports; "
+            "imaging_report for X-ray/CT/MRI/USG; "
+            "discharge_summary for discharge/clinical notes; "
+            "prescription for Rx/medicine lists. Never use unknown. "
             "2. Extract 'document_metadata': { 'provider_name': '...', 'document_date': 'YYYY-MM-DD', 'location': '...' }. "
             "3. Extract 'clinical_entities': A list of objects with: "
             "{\"category\": \"diagnosis|medication|lab_value|symptom|allergy|vital_sign|procedure\", "

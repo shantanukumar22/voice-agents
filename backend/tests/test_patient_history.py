@@ -19,7 +19,12 @@ class InMemoryMedicalDocumentRepository:
     def upsert_patient(self, patient_id: str, display_name: str | None = None) -> None:
         self.patients[patient_id] = display_name
 
-    def create(self, patient_id: str, document: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    def create(
+        self,
+        patient_id: str,
+        document: dict[str, Any],
+        encounter_id: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
         if patient_id not in self.patients:
             raise PatientNotFoundError(patient_id)
         for existing in self.documents:
@@ -28,6 +33,7 @@ class InMemoryMedicalDocumentRepository:
         now = datetime.now(timezone.utc).isoformat()
         record = {
             "id": str(uuid4()), "patient_id": patient_id,
+            "encounter_id": encounter_id,
             "ocr_document_id": document["document_id"], "document_type": document["document_type"],
             "extraction_timestamp": document["extraction_timestamp"],
             "clinical_document_date": document.get("clinical_document_date"),
@@ -120,9 +126,35 @@ class PatientHistoryTests(unittest.TestCase):
         with self.assertRaises(InvalidOCRPayloadError):
             self.service.persist_ocr_result(self.patient_id, {"structured_document": {"data": []}})
 
-    def test_invalid_document_type_is_rejected(self):
+    def test_invalid_document_type_is_coerced(self):
+        record, _ = self.service.persist_ocr_result(
+            self.patient_id, self.payload("clinical_note")
+        )
+        self.assertEqual(record["document_type"], "discharge_summary")
+        record2, _ = self.service.persist_ocr_result(
+            self.patient_id, self.payload("unknown")
+        )
+        self.assertEqual(record2["document_type"], "laboratory_report")
+        record3, _ = self.service.persist_ocr_result(
+            self.patient_id, self.payload("lab_report")
+        )
+        self.assertEqual(record3["document_type"], "laboratory_report")
+
+    def test_ocr_invented_types_are_coerced(self):
+        record, _ = self.service.persist_ocr_result(
+            self.patient_id, self.payload("jaundice_report")
+        )
+        self.assertEqual(record["document_type"], "laboratory_report")
+        record2, _ = self.service.persist_ocr_result(
+            self.patient_id, self.payload("chest_xray")
+        )
+        self.assertEqual(record2["document_type"], "imaging_report")
+
+    def test_empty_document_type_is_rejected(self):
         with self.assertRaises(InvalidOCRPayloadError):
-            self.service.persist_ocr_result(self.patient_id, self.payload("clinical_note"))
+            self.service.persist_ocr_result(
+                self.patient_id, self.payload("")
+            )
 
     def test_duplicate_is_idempotent(self):
         document_id = str(uuid4())
