@@ -10,3 +10,7 @@ client/dist/
 .uv-cache/
 
 project_idea.md
+# Temporary scratch & dev scripts
+scratch/
+backend/scratch/
+backend/scripts/
