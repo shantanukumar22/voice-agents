@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Temporary scratch files
+scratch/
+backend/scratch/
+
+# One-off development scripts
+backend/scripts/
