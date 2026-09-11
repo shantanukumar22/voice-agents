@@ -49,11 +49,16 @@ export type EncounterSummary = {
 };
 
 export type HistoryField = {
+  id: string;
   section?: string;
   field?: string;
   value?: string;
   bodyRegions?: string[];
   source?: string;
+  verified?: boolean;
+  verifiedAt?: string;
+  verifiedBy?: string;
+  updatedAt?: string;
 };
 
 export type DoctorReport = {
@@ -158,6 +163,16 @@ export function patchFollowUp(
   body: { status?: string },
 ): Promise<unknown> {
   return api(`/api/follow-ups/${followUpId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function verifyHistoryField(
+  encounterId: string,
+  body: { section: string; field: string; verified: boolean },
+): Promise<HistoryField> {
+  return api(`/api/encounters/${encounterId}/history-fields`, {
     method: "PATCH",
     body: JSON.stringify(body),
   });

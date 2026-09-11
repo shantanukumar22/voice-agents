@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
+from openai import OpenAI
 
 from backend.repositories.encounters import EncounterRepository
 from backend.repositories.medical_documents import MedicalDocumentRepository
 
 SECTION_ORDER_EN = [
+
     ("chief_complaint", "Chief complaint"),
     ("hpi", "History of present illness"),
     ("past", "Past history"),
@@ -124,6 +127,44 @@ class SummaryService:
     ):
         self.encounters = encounters or EncounterRepository()
         self.documents = documents or MedicalDocumentRepository()
+        self.llm = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
+
+    def _generate_reasoning(self, fields: list[dict[str, Any]], docs: list[dict[str, Any]], lang: str) -> str:
+        if not self.llm:
+            return "Reasoning unavailable: OpenAI API key not configured."
+
+        # Synthesize structured data into a text block for the LLM
+        history_text = "\n".join([f"{f.get('section')}.{f.get('field')}: {f.get('value')}" for f in fields])
+        docs_text = "\n".join([f"{d.get('document_type')}: {d.get('summary') or 'Captured'}" for d in docs])
+
+        prompt = f"""
+        You are a senior medical consultant. Analyze the following patient data and provide a concise 'Clinical Reasoning' block.
+        The reasoning should synthesize the symptoms, history, and AYUSH parameters into a medical hypothesis.
+
+        Patient History:
+        {history_text}
+
+        Prior Documents:
+        {docs_text}
+
+        Requirements:
+        1. Language: {lang}
+        2. Tone: Professional, analytical, objective.
+        3. Content: Synthesize the 'why' behind the symptoms. If AYUSH data is present, integrate it into the logic (e.g., 'The reported Mandam Agni suggests a metabolic imbalance contributing to...').
+        4. Length: 2-4 sentences.
+        5. Warning: Do NOT provide a final diagnosis. Provide a hypothesis/reasoning for the physician to verify.
+        """
+
+        try:
+            response = self.llm.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-4o"),
+                messages=[{"role": "system", "content": "You are a clinical synthesis expert."},
+                          {"role": "user", "content": prompt}],
+                temperature=0.3,
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            return f"Error generating reasoning: {str(e)}"
 
     def generate(self, encounter_id: str) -> dict[str, Any]:
         fields = self.encounters.list_history(encounter_id)
@@ -132,10 +173,18 @@ class SummaryService:
         except LookupError:
             docs = []
         draft_en, draft_hi, meta = build_summary_drafts(fields, docs)
+
+        # Generate the synthesis/reasoning block
+        reasoning_en = self._generate_reasoning(fields, docs, "English")
+        reasoning_hi = self._generate_reasoning(fields, docs, "Hindi")
+
         return self.encounters.save_summary_draft(
             encounter_id,
             draft_en=draft_en,
             draft_hi=draft_hi,
+            reasoning_en=reasoning_en,
+            reasoning_hi=reasoning_hi,
             model_meta=meta,
             status="draft",
         )
+

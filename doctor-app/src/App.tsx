@@ -9,6 +9,7 @@ import {
   listDoctorEncounters,
   patchFollowUp,
   patchSummary,
+  verifyHistoryField,
   type DoctorReport,
   type Encounter,
 } from "./api";
@@ -1095,6 +1096,23 @@ export default function App() {
 
                 <section className="mc-panel">
                   <div className="mc-panel-head">
+                    <h2>Clinical Reasoning</h2>
+                    <span className="mc-chip muted">AI Synthesis</span>
+                  </div>
+                  <div className="mc-split">
+                    <div className="mc-field">
+                      <span className="mc-field-label">English Insight</span>
+                      <p className="mc-note-value">{report.summary.reasoningEn || "No reasoning generated."}</p>
+                    </div>
+                    <div className="mc-field">
+                      <span className="mc-field-label">Hindi Insight</span>
+                      <p className="mc-note-value">{report.summary.reasoningHi || "कोई तर्क उत्पन्न नहीं हुआ।"}</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="mc-panel">
+                  <div className="mc-panel-head">
                     <h2>Clinical brief</h2>
                     <div className="mc-panel-head-actions">
                       <span className={`mc-chip ${statusTone(report.summary.status)}`}>
@@ -1180,7 +1198,8 @@ export default function App() {
                             <th>Section</th>
                             <th>Field</th>
                             <th>Value</th>
-                            <th>Source</th>
+                            <th>Status</th>
+                            <th>Action</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1190,7 +1209,27 @@ export default function App() {
                               <td>{humanizeField(f.field)}</td>
                               <td>{f.value}</td>
                               <td>
-                                <span className="mc-chip muted">{f.source || "—"}</span>
+                                <span className={`mc-chip ${f.verified ? "ok" : "muted"}`}>
+                                  {f.verified ? "Verified" : "AI-Structured"}
+                                </span>
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="mc-btn ghost sm"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void run(async () => {
+                                      await verifyHistoryField(selectedId!, {
+                                        section: f.section || "",
+                                        field: f.field || "",
+                                        verified: !f.verified,
+                                      });
+                                    }, `Field marked as ${!f.verified ? "verified" : "unverified"}`)
+                                }
+                                >
+                                  {f.verified ? "Unverify" : "Verify"}
+                                </button>
                               </td>
                             </tr>
                           ))}

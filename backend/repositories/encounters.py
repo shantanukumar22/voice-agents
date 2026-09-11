@@ -208,6 +208,9 @@ class EncounterRepository:
                      value = EXCLUDED.value,
                      body_regions = EXCLUDED.body_regions,
                      source = EXCLUDED.source,
+                     verified = FALSE,
+                     verified_at = NULL,
+                     verified_by = NULL,
                      updated_at = CURRENT_TIMESTAMP
                    RETURNING *""",
                 (
@@ -265,10 +268,42 @@ class EncounterRepository:
                 "value": r["value"],
                 "bodyRegions": r["body_regions"],
                 "source": r["source"],
+                "verified": r["verified"],
+                "verifiedAt": r["verified_at"].isoformat() if r["verified_at"] else None,
+                "verifiedBy": r["verified_by"],
                 "updatedAt": r["updated_at"].isoformat(),
             }
             for r in rows
         ]
+
+    def verify_history_field(
+        self,
+        encounter_id: str,
+        section: str,
+        field: str,
+        verified: bool,
+        verified_by: str | None = None,
+    ) -> dict[str, Any]:
+        with self.pool.connection() as connection, connection.transaction():
+            row = connection.execute(
+                """UPDATE history_fields SET
+                       verified = %s,
+                       verified_at = CASE WHEN %s = TRUE THEN CURRENT_TIMESTAMP ELSE verified_at END,
+                       verified_by = %s,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE encounter_id = %s AND section = %s AND field = %s
+                   RETURNING *""",
+                (verified, verified, verified_by, encounter_id, section, field),
+            ).fetchone()
+            if row is None:
+                raise EncounterNotFoundError(f"Field {section}.{field} not found for encounter {encounter_id}")
+            return {
+                "id": str(row["id"]),
+                "verified": row["verified"],
+                "verifiedAt": row["verified_at"].isoformat() if row["verified_at"] else None,
+                "verifiedBy": row["verified_by"],
+                "updatedAt": row["updated_at"].isoformat(),
+            }
 
     def get_summary(self, encounter_id: str, *, verify_exists: bool = True) -> dict[str, Any]:
         with self.pool.connection() as connection:
@@ -294,6 +329,8 @@ class EncounterRepository:
         *,
         draft_en: str,
         draft_hi: str,
+        reasoning_en: str | None = None,
+        reasoning_hi: str | None = None,
         model_meta: dict[str, Any] | None = None,
         status: str = "draft",
     ) -> dict[str, Any]:
@@ -303,11 +340,13 @@ class EncounterRepository:
             ).fetchone() is None:
                 raise EncounterNotFoundError(encounter_id)
             row = connection.execute(
-                """INSERT INTO encounter_summaries(id, encounter_id, draft_en, draft_hi, status, model_meta)
-                   VALUES (%s, %s, %s, %s, %s, %s)
+                """INSERT INTO encounter_summaries(id, encounter_id, draft_en, draft_hi, reasoning_en, reasoning_hi, status, model_meta)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                    ON CONFLICT (encounter_id) DO UPDATE SET
                      draft_en = EXCLUDED.draft_en,
                      draft_hi = EXCLUDED.draft_hi,
+                     reasoning_en = EXCLUDED.reasoning_en,
+                     reasoning_hi = EXCLUDED.reasoning_hi,
                      status = EXCLUDED.status,
                      model_meta = EXCLUDED.model_meta,
                      updated_at = CURRENT_TIMESTAMP
@@ -317,6 +356,8 @@ class EncounterRepository:
                     encounter_id,
                     draft_en,
                     draft_hi,
+                    reasoning_en,
+                    reasoning_hi,
                     status,
                     Jsonb(model_meta or {}),
                 ),
@@ -661,6 +702,8 @@ class EncounterRepository:
             "encounterId": str(row["encounter_id"]),
             "draftEn": row["draft_en"] or "",
             "draftHi": row["draft_hi"] or "",
+            "reasoningEn": row["reasoning_en"] or "",
+            "reasoningHi": row["reasoning_hi"] or "",
             "status": row["status"],
             "modelMeta": row["model_meta"] or {},
             "createdAt": row["created_at"].isoformat() if row["created_at"] else None,
