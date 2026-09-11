@@ -65,6 +65,7 @@ from backend.repositories.encounters import (
     SESSION_STEPS,
 )
 from backend.services.summary_service import SummaryService
+from backend.models.clinical_schemas import HistorySection, HPIField, AyushField
 
 # Platform secrets in backend/.env; voice keys may still live in bot/.env for integrated serve.
 _BACKEND_ENV = Path(__file__).resolve().parent / ".env"
@@ -380,22 +381,73 @@ async def patch_encounter_step(encounter_id: str, request: Request):
 @app.post("/api/encounters/{encounter_id}/history-fields")
 async def upsert_history_field(encounter_id: str, request: Request):
     body = await request.json()
-    section = body.get("section")
-    field = body.get("field")
+    section_raw = body.get("section")
+    field_raw = body.get("field")
     value = body.get("value")
-    if not section or not field or value is None or str(value).strip() == "":
+    if not section_raw or not field_raw or value is None or str(value).strip() == "":
         raise HTTPException(status_code=422, detail="section, field, and value are required")
+
+    # Validation against structured clinical schemas
+    try:
+        section = HistorySection(section_raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid section '{section_raw}'. Must be one of {[s.value for s in HistorySection]}"
+        )
+
+    # Field validation depends on section
+    if section == HistorySection.HPI:
+        try:
+            # HPI fields must be within HPIField enum
+            HPIField(field_raw)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid HPI field '{field_raw}'. Must be one of {[f.value for f in HPIField]}"
+            )
+    elif section == HistorySection.AYUSH_ASSESSMENT:
+        try:
+            # AYUSH fields must be within AyushField enum
+            AyushField(field_raw)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid AYUSH field '{field_raw}'. Must be one of {[f.value for f in AyushField]}"
+            )
+
     try:
         return encounter_repository.upsert_history_field(
             encounter_id,
             section=str(section),
-            field=str(field),
+            field=str(field_raw),
             value=str(value).strip(),
             body_regions=body.get("body_regions") or body.get("bodyRegions") or [],
             source=str(body.get("source") or "voice"),
         )
     except EncounterNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Encounter not found") from exc
+
+
+@app.patch("/api/encounters/{encounter_id}/history-fields")
+async def verify_history_field(encounter_id: str, request: Request):
+    _authorize_staff(request)
+    body = await request.json()
+    section = body.get("section")
+    field = body.get("field")
+    verified = bool(body.get("verified", False))
+    if not section or not field:
+        raise HTTPException(status_code=422, detail="section and field are required")
+    try:
+        return encounter_repository.verify_history_field(
+            encounter_id=encounter_id,
+            section=str(section),
+            field=str(field),
+            verified=verified,
+            verified_by=request.headers.get("X-Staff-User-ID"),
+        )
+    except EncounterNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/encounters/{encounter_id}/history")
