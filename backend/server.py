@@ -51,7 +51,10 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from bot import run_bot
+try:
+    from bot import run_bot
+except (ImportError, ModuleNotFoundError):
+    run_bot = None  # type: ignore
 from psycopg import OperationalError
 from psycopg_pool.errors import PoolClosed, PoolTimeout
 

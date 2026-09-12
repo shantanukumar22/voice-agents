@@ -9,3 +9,4 @@ langchain-core>=0.1.30
 loguru>=0.7.2
 python-dotenv>=1.0.1
 requests>=2.31.0
+pipecat-ai[cartesia,deepgram,openai,silero,webrtc]>=0.0.92
