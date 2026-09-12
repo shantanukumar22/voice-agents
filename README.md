@@ -36,28 +36,27 @@ Fill in:
 - `OPENAI_API_KEY`
 - `CARTESIA_API_KEY`
 
-### 2. Bot server
+### 2. Run (two terminals)
+
+Voice kiosk only needs the bot + client:
 
 ```bash
-cd bot
-uv sync
-uv run server.py
+make sync          # once — installs bot + client deps
+make bot           # :7860  voice / WebRTC / guide TTS
+make client        # :5173  kiosk UI
 ```
 
-Health check: http://localhost:7860/health
+Health check: http://localhost:7860/health  
+Open http://localhost:5173, allow the microphone, choose a language, start the conversation.
 
-**macOS note:** If connect fails with `PermissionError: Operation not permitted` / `ifaddr.get_adapters`, WebRTC cannot list network interfaces (common when starting the bot from Cursor). Prefer running `uv run server.py` in **Terminal.app**, or allow **Local Network** for Cursor under System Settings → Privacy & Security. The server also falls back to `127.0.0.1` for same-machine testing.
-
-### 3. Kiosk web app
+**Platform API** (OCR, encounters, RAG, doctor app) — only when you need those:
 
 ```bash
-cp client/.env.example client/.env
-cd client
-npm install
-npm run dev
+make api           # :8000
+make doctor        # optional staff UI
 ```
 
-Open the Vite URL (usually http://localhost:5173), allow the microphone, choose a language, start the conversation.
+**macOS note:** If connect fails with `PermissionError: Operation not permitted` / `ifaddr.get_adapters`, WebRTC cannot list network interfaces (common when starting the bot from Cursor). Prefer running `make bot` in **Terminal.app**, or allow **Local Network** for Cursor under System Settings → Privacy & Security. The server also falls back to `127.0.0.1` for same-machine testing.
 
 ## Clinical UI
 

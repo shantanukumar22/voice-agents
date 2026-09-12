@@ -19,13 +19,17 @@ from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMMessagesAppendFrame, LLMRunFrame, TTSSpeakFrame
+from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.frames.frames import LLMMessagesAppendFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
+)
+from pipecat.turns.user_mute import (
+    FunctionCallUserMuteStrategy,
 )
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
@@ -73,7 +77,12 @@ def _tools() -> ToolsSchema:
                     },
                     "section": {
                         "type": "string",
-                        "description": "History section id, e.g. chief_complaint, hpi, drug_allergy.",
+                        "description": (
+                            "History section id. Must be one of: chief_complaint, hpi, "
+                            "past_medical_history, past_surgical_history, medications, "
+                            "allergies, family_history, personal_history, review_of_systems, "
+                            "ayush_assessment."
+                        ),
                     },
                 },
                 required=["question", "options"],
@@ -125,15 +134,23 @@ def _tools() -> ToolsSchema:
             FunctionSchema(
                 name="finish_history_section",
                 description=(
-                    "End the interview now. Call when enough history is collected OR when the "
-                    "patient asks to stop/end/finish (e.g. बस, खत्म, stop, end, enough). "
-                    "Do not ask more questions after this."
+                    "End the interview now. Call ONLY after the 5–6 core questions are answered, "
+                    "OR when the patient asks to stop/end/finish (e.g. बस, खत्म, stop, end, enough) "
+                    "with patient_requested_stop=true. "
+                    "Do not ask more questions after this. Do NOT call early because of silence or noise."
                 ),
                 properties={
                     "summary_for_patient": {
                         "type": "string",
                         "description": "One short sentence confirming you captured their history.",
-                    }
+                    },
+                    "patient_requested_stop": {
+                        "type": "boolean",
+                        "description": (
+                            "True only if the patient explicitly asked to stop/end. "
+                            "Never set true for silence, noise, or unclear audio."
+                        ),
+                    },
                 },
                 required=["summary_for_patient"],
             ),
@@ -235,9 +252,24 @@ async def run_bot(webrtc_connection, session_config: dict[str, Any] | None = Non
         ],
         tools=_tools(),
     )
+    # Hospital/OPD noise: require clearer speech before opening a user turn,
+    # and wait longer for silence so brief ambient noise doesn't end the turn early.
+    vad_analyzer = SileroVADAnalyzer(
+        params=VADParams(
+            confidence=0.88,
+            start_secs=0.35,
+            stop_secs=0.55,
+            min_volume=0.72,
+        )
+    )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=vad_analyzer,
+            user_mute_strategies=[
+                FunctionCallUserMuteStrategy(),
+            ],
+        ),
     )
 
     history_record: dict[str, Any] = {
@@ -246,7 +278,12 @@ async def run_bot(webrtc_connection, session_config: dict[str, Any] | None = Non
         "fields": [],
         "red_flags": [],
         "completed": False,
+        "questions_asked": 1,  # fixed chief-complaint opener already shown
+        "last_question": "",
     }
+    MAX_QUESTIONS = 11 if ayush_mode else 6
+    MIN_QUESTIONS_BEFORE_FINISH = 8 if ayush_mode else 5
+    MIN_AYUSH_FIELDS = 4 if ayush_mode else 0
 
     ui_push: dict[str, Any] = {"fn": None}
 
@@ -296,9 +333,26 @@ async def run_bot(webrtc_connection, session_config: dict[str, Any] | None = Non
         if history_record.get("completed"):
             await params.result_callback({"status": "ignored", "reason": "session_already_complete"})
             return
+        asked = int(history_record.get("questions_asked") or 0)
         question = sanitize_patient_text(params.arguments.get("question", "") or "")
         options = params.arguments.get("options") or []
         section = params.arguments.get("section", "")
+        last_q = (history_record.get("last_question") or "").strip()
+        is_reask = bool(question) and question.strip() == last_q
+        if asked >= MAX_QUESTIONS and not is_reask:
+            await params.result_callback(
+                {
+                    "status": "ignored",
+                    "reason": "max_questions_reached",
+                    "questions_asked": asked,
+                    "hint": "Call finish_history_section now with a one-line wrap-up.",
+                }
+            )
+            return
+        # Re-asking the same question (noise / unclear) must not burn the budget.
+        if question and not is_reask:
+            history_record["questions_asked"] = asked + 1
+            history_record["last_question"] = question.strip()
         await push_ui(
             {
                 "type": "touch_prompt",
@@ -307,13 +361,40 @@ async def run_bot(webrtc_connection, session_config: dict[str, Any] | None = Non
                 "section": section,
             }
         )
-        await params.result_callback({"status": "shown", "option_count": len(options)})
+        await params.result_callback(
+            {
+                "status": "shown",
+                "option_count": len(options),
+                "questions_asked": history_record["questions_asked"],
+                "questions_remaining": max(0, MAX_QUESTIONS - history_record["questions_asked"]),
+            }
+        )
 
     async def record_history_field(params: FunctionCallParams):
+        section = str(params.arguments.get("section") or "").strip()
+        field = str(params.arguments.get("field") or "").strip()
+        value = params.arguments.get("value")
+        # Coerce common AYUSH mislabels so the doctor brief gets a real AYUSH block.
+        ayush_aliases = {
+            "diet_preference": ("ayush_assessment", "ahara"),
+            "diet": ("ayush_assessment", "ahara"),
+            "food": ("ayush_assessment", "ahara"),
+            "appetite": ("ayush_assessment", "agni"),
+            "digestion": ("ayush_assessment", "agni"),
+            "routine": ("ayush_assessment", "vihara"),
+            "daily_routine": ("ayush_assessment", "vihara"),
+            "sleep": ("ayush_assessment", "vihara"),
+            "sleep_pattern": ("ayush_assessment", "vihara"),
+        }
+        key = field.lower().replace(" ", "_")
+        if ayush_mode and key in ayush_aliases:
+            section, field = ayush_aliases[key]
+        elif key in ayush_aliases:
+            section, field = ayush_aliases[key]
         entry = {
-            "section": params.arguments.get("section"),
-            "field": params.arguments.get("field"),
-            "value": params.arguments.get("value"),
+            "section": section,
+            "field": field,
+            "value": value,
             "body_regions": params.arguments.get("body_regions") or [],
         }
         history_record["fields"].append(entry)
@@ -332,8 +413,89 @@ async def run_bot(webrtc_connection, session_config: dict[str, Any] | None = Non
         if history_record.get("completed"):
             await params.result_callback({"status": "already_complete"})
             return
-        history_record["completed"] = True
+        asked = int(history_record.get("questions_asked") or 0)
+        fields = history_record.get("fields") or []
+        # Block premature wrap-up from noise/junk turns unless patient clearly wants to stop
+        # or we already hit the question cap / enough facts.
         summary = sanitize_patient_text(params.arguments.get("summary_for_patient", "") or "")
+        patient_stop = bool(params.arguments.get("patient_requested_stop"))
+        if (
+            asked < MIN_QUESTIONS_BEFORE_FINISH
+            and len(fields) < MIN_QUESTIONS_BEFORE_FINISH
+            and not patient_stop
+            and not history_record.get("red_flags")
+        ):
+            await params.result_callback(
+                {
+                    "status": "rejected_too_early",
+                    "questions_asked": asked,
+                    "fields_recorded": len(fields),
+                    "hint": (
+                        "Keep asking the remaining core questions one at a time. "
+                        "Only finish after 5–6 clear answers (or if the patient asks to stop)."
+                    ),
+                }
+            )
+            return
+        if (
+            ayush_mode
+            and not patient_stop
+            and not history_record.get("red_flags")
+        ):
+            ayush_fields = {
+                str(f.get("field") or "").lower().replace(" ", "_")
+                for f in fields
+                if str(f.get("section") or "").lower().replace(" ", "_")
+                in {"ayush_assessment", "ayush"}
+                or str(f.get("field") or "").lower().replace(" ", "_")
+                in {
+                    "ahara",
+                    "vihara",
+                    "agni",
+                    "prakriti",
+                    "vikriti",
+                    "koshtha",
+                    "nidana",
+                    "samprapti",
+                    "diet_preference",
+                    "diet",
+                    "appetite",
+                    "digestion",
+                    "routine",
+                    "sleep",
+                }
+            }
+            # Collapse diet aliases onto ahara for the count
+            normalized = set()
+            for name in ayush_fields:
+                if name in {"diet_preference", "diet", "food"}:
+                    normalized.add("ahara")
+                elif name in {"appetite", "digestion"}:
+                    normalized.add("agni")
+                elif name in {"routine", "daily_routine", "sleep", "sleep_pattern"}:
+                    normalized.add("vihara")
+                else:
+                    normalized.add(name)
+            if len(normalized) < MIN_AYUSH_FIELDS:
+                missing = [
+                    x
+                    for x in ("agni", "ahara", "vihara", "prakriti", "koshtha")
+                    if x not in normalized
+                ]
+                await params.result_callback(
+                    {
+                        "status": "rejected_missing_ayush",
+                        "ayush_fields_recorded": sorted(normalized),
+                        "hint": (
+                            f"AYUSH mode needs at least {MIN_AYUSH_FIELDS} distinct "
+                            "ayush_assessment fields before finish. Ask the next missing "
+                            f"one now ({', '.join(missing[:3]) or 'prakriti'}), "
+                            "record with section=ayush_assessment, then continue."
+                        ),
+                    }
+                )
+                return
+        history_record["completed"] = True
         # Drop leftover tap choices so the kiosk leaves interview mode.
         await push_ui({"type": "touch_prompt", "question": "", "options": [], "section": ""})
         await push_ui(
@@ -398,6 +560,7 @@ async def run_bot(webrtc_connection, session_config: dict[str, Any] | None = Non
                 "Dizziness / weakness",
                 "Something else",
             ]
+        history_record["last_question"] = first_q
         await push_ui(
             {
                 "type": "touch_prompt",
@@ -406,12 +569,11 @@ async def run_bot(webrtc_connection, session_config: dict[str, Any] | None = Non
                 "section": "chief_complaint",
             }
         )
-        # Speak the fixed opener immediately via TTS (don't wait on LLM).
-        # Keep spoken line = on-screen question so UI text can stay in sync.
+        # Fixed opener is spoken from a pre-cached MP3 on the kiosk (zero TTS latency).
+        # Keep the same line in LLM context so follow-ups stay coherent.
         spoken = first_q
         context.add_message({"role": "assistant", "content": spoken})
-        await worker.queue_frames([TTSSpeakFrame(text=spoken)])
-        # Wait for the patient's answer (voice or tap) — no LLM kickoff needed.
+        # Wait for the patient's answer (voice or tap) — no LLM kickoff / TTS needed.
 
     @worker.rtvi.event_handler("on_client_message")
     async def on_client_message(rtvi, msg):
@@ -440,7 +602,7 @@ async def run_bot(webrtc_connection, session_config: dict[str, Any] | None = Non
                     )
                 ]
             )
-            await push_ui({"type": "touch_prompt", "question": "", "options": [], "section": ""})
+            # Keep previous touch options on the kiosk until the next question arrives.
             return
 
         if msg_type == "set_session":

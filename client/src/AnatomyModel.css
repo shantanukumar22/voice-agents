@@ -3,13 +3,15 @@
   width: 100%;
   height: 100%;
   min-height: 0;
-  border-radius: 22px;
+  border-radius: 0;
   overflow: hidden;
-  background: radial-gradient(120% 140% at 50% 0%, #131a30 0%, #060812 70%);
-}
-
-.anat-viewport--light {
-  background: radial-gradient(120% 140% at 50% 0%, #fff7ef 0%, #f0e4d8 70%);
+  /* Inherits --bg-0/--bg-1/--accent-soft from the parent .med-shell theme so the
+     stage always matches the warm palette, in both dark and light mode. */
+  background: radial-gradient(
+    120% 140% at 50% 0%,
+    color-mix(in srgb, var(--accent, #d99a52) 16%, var(--bg-1, #241a12)) 0%,
+    var(--bg-0, #1c140e) 70%
+  );
 }
 
 .anat-viewport canvas {
@@ -18,18 +20,17 @@
 }
 
 .anat-loading {
-  color: #9fb0c2;
+  color: var(--muted, #b6a591);
   font-size: 0.85rem;
   font-family: inherit;
-  background: rgba(10, 15, 20, 0.7);
+  background: rgba(36, 26, 19, 0.55);
   padding: 0.5rem 0.9rem;
   border-radius: 999px;
   white-space: nowrap;
 }
 
 .anat-viewport--light .anat-loading {
-  color: #5a6478;
-  background: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 250, 241, 0.82);
 }
 /* 
 .anat-hotspot {
@@ -59,20 +60,13 @@
   margin: 0;
   font-size: 0.62rem;
   letter-spacing: 0.02em;
-  color: rgba(190, 202, 215, 0.55);
+  color: var(--muted, #b6a591);
+  opacity: 0.75;
   pointer-events: auto;
 }
 
 .anat-credit a {
-  color: rgba(210, 222, 235, 0.75);
-}
-
-.anat-viewport--light .anat-credit {
-  color: rgba(70, 78, 96, 0.55);
-}
-
-.anat-viewport--light .anat-credit a {
-  color: rgba(50, 70, 130, 0.8);
+  color: var(--accent-glow, #f0c087);
 }
 
 @media (max-width: 900px) {

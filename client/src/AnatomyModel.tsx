@@ -1,6 +1,6 @@
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { Canvas } from "@react-three/fiber";
-import { Bounds, Html, OrbitControls, useGLTF } from "@react-three/drei";
+import { Suspense, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Canvas, useThree } from "@react-three/fiber";
+import { Bounds, OrbitControls, useBounds, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { BodyRegionId } from "./bodyRegions";
 import "./AnatomyModel.css";
@@ -230,36 +230,23 @@ function buildRegionGroups(root: THREE.Object3D): RegionGroups {
   return groups;
 }
 
-function worldCenter(meshes: THREE.Mesh[]): [number, number, number] | null {
-  const box = new THREE.Box3();
-  let any = false;
-  meshes.forEach((mesh) => {
-    mesh.updateWorldMatrix(true, false);
-    box.expandByObject(mesh);
-    any = true;
-  });
-  if (!any || box.isEmpty()) return null;
-  const c = box.getCenter(new THREE.Vector3());
-  return [c.x, c.y, c.z];
-}
-
-const HIGHLIGHT_COLOR = new THREE.Color("#4f8bff");
+const HIGHLIGHT_COLOR = new THREE.Color("#d99a52");
 
 function Model({
   activeRegions,
-  onGroupsReady,
+  onReady,
 }: {
   activeRegions: BodyRegionId[];
-  onGroupsReady: (groups: RegionGroups) => void;
+  onReady: () => void;
 }) {
   const { scene } = useGLTF(MODEL_URL, true);
   const cloned = useMemo(() => scene.clone(true), [scene]);
   const groupsRef = useRef<RegionGroups>({});
+  const { invalidate } = useThree();
 
   useEffect(() => {
     groupsRef.current = buildRegionGroups(cloned);
-    onGroupsReady(groupsRef.current);
-    // Subtle default material tint so the figure reads on a dark stage.
+    // Subtle default material tint so the figure reads on the stage.
     cloned.traverse((child) => {
       const mesh = child as THREE.Mesh;
       if (!mesh.isMesh) return;
@@ -274,8 +261,12 @@ function Model({
       if (Array.isArray(mat)) mat.forEach(apply);
       else if (mat) apply(mat);
     });
+    onReady();
+    invalidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloned]);
+
+  const regionKey = activeRegions.join(",");
 
   useEffect(() => {
     const groups = groupsRef.current;
@@ -292,7 +283,7 @@ function Model({
             const clone = (src as THREE.MeshStandardMaterial).clone();
             clone.color = HIGHLIGHT_COLOR.clone();
             clone.emissive = HIGHLIGHT_COLOR;
-            clone.emissiveIntensity = 1.1;
+            clone.emissiveIntensity = 0.85;
             mesh.userData.__highlightMaterial = clone;
           }
           mesh.material = mesh.userData.__highlightMaterial as THREE.Material;
@@ -301,19 +292,37 @@ function Model({
         }
       });
     });
-  }, [activeRegions]);
+    invalidate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regionKey, invalidate]);
 
   return <primitive object={cloned} />;
 }
 
-type Hotspot = { region: BodyRegionId; position: [number, number, number] };
+/** Fit the camera once after the model is ready — never again on speak/reflow. */
+function FitOnce({ ready }: { ready: boolean }) {
+  const api = useBounds();
+  const fitted = useRef(false);
+  const { invalidate } = useThree();
 
-function Loader() {
-  return (
-    <Html center>
-      <div className="anat-loading">Loading 3D anatomy…</div>
-    </Html>
-  );
+  useLayoutEffect(() => {
+    if (!ready || fitted.current) return;
+    fitted.current = true;
+    // Wait two frames so Canvas has its final pixel size before measuring.
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        api.refresh().fit();
+        invalidate();
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [ready, api, invalidate]);
+
+  return null;
 }
 
 type Props = {
@@ -322,66 +331,52 @@ type Props = {
   className?: string;
 };
 
-export default function AnatomyModel({
+function AnatomyModel({
   activeRegions,
   theme = "dark",
   className,
 }: Props) {
-  const [groups, setGroups] = useState<RegionGroups>({});
-  const [hotspots, setHotspots] = useState<Hotspot[]>([]);
-  const regionKey = activeRegions.join(",");
-  const canvasBg = theme === "light" ? "#f3ebe3" : "#0a0f1c";
-
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      const next: Hotspot[] = [];
-      activeRegions.forEach((region) => {
-        const meshes = groups[region];
-        if (!meshes?.length) return;
-        const center = worldCenter(meshes);
-        if (center) next.push({ region, position: center });
-      });
-      setHotspots(next);
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, 220);
-    return () => window.clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, regionKey]);
+  const [modelReady, setModelReady] = useState(false);
 
   return (
     <div className={`anat-viewport anat-viewport--${theme} ${className ?? ""}`}>
       <Canvas
-        dpr={[1, 1.8]}
-        gl={{ antialias: true, alpha: true }}
-        camera={{ fov: 42, near: 0.05, far: 50 }}
+        dpr={[1, 1.25]}
+        frameloop="demand"
+        gl={{
+          antialias: true,
+          alpha: true,
+          powerPreference: "high-performance",
+        }}
+        camera={{ fov: 38, near: 0.1, far: 80, position: [0, 1.0, 3.4] }}
+        resize={{ debounce: 250 }}
       >
-        <color attach="background" args={[canvasBg]} />
         <ambientLight intensity={theme === "light" ? 0.95 : 0.75} />
         <directionalLight
           position={[3, 5, 4]}
-          intensity={theme === "light" ? 0.95 : 1.1}
+          intensity={theme === "light" ? 0.9 : 1.0}
         />
         <directionalLight
           position={[-4, -2, -3]}
-          intensity={theme === "light" ? 0.45 : 0.35}
+          intensity={theme === "light" ? 0.4 : 0.3}
         />
-        <Suspense fallback={<Loader />}>
-          <Bounds fit clip observe margin={1.25}>
-            <Model activeRegions={activeRegions} onGroupsReady={setGroups} />
+        <Suspense fallback={null}>
+          {/* fit={false} + observe={false}: camera only moves via FitOnce */}
+          <Bounds fit={false} clip={false} observe={false} margin={1.45}>
+            <Model
+              activeRegions={activeRegions}
+              onReady={() => setModelReady(true)}
+            />
+            <FitOnce ready={modelReady} />
           </Bounds>
         </Suspense>
-        {hotspots.map((h) => (
-          <Html key={h.region} position={h.position} center distanceFactor={7} zIndexRange={[10, 0]}>
-            <div className="anat-hotspot" aria-hidden />
-          </Html>
-        ))}
         <OrbitControls
           makeDefault
-          autoRotate={activeRegions.length === 0}
-          autoRotateSpeed={0.5}
           enablePan={false}
-          minDistance={0.3}
-          maxDistance={8}
+          enableZoom={false}
+          autoRotate={false}
+          minPolarAngle={Math.PI * 0.4}
+          maxPolarAngle={Math.PI * 0.6}
         />
       </Canvas>
       <p className="anat-credit">
@@ -394,3 +389,11 @@ export default function AnatomyModel({
     </div>
   );
 }
+
+export default memo(AnatomyModel, (prev, next) => {
+  return (
+    prev.theme === next.theme &&
+    prev.className === next.className &&
+    prev.activeRegions.join(",") === next.activeRegions.join(",")
+  );
+});

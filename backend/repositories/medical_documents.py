@@ -63,6 +63,18 @@ class MedicalDocumentRepository:
                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    ON CONFLICT(patient_id, ocr_document_id) DO UPDATE SET
                      encounter_id = COALESCE(EXCLUDED.encounter_id, medical_documents.encounter_id),
+                     original_file_reference = COALESCE(
+                       EXCLUDED.original_file_reference,
+                       medical_documents.original_file_reference
+                     ),
+                     structured_data = EXCLUDED.structured_data,
+                     complete_ocr_result = EXCLUDED.complete_ocr_result,
+                     confidence_score = EXCLUDED.confidence_score,
+                     extraction_errors = EXCLUDED.extraction_errors,
+                     clinical_document_date = COALESCE(
+                       EXCLUDED.clinical_document_date,
+                       medical_documents.clinical_document_date
+                     ),
                      updated_at = CURRENT_TIMESTAMP
                    RETURNING *, (xmax = 0) AS inserted""",
                 (
@@ -82,6 +94,16 @@ class MedicalDocumentRepository:
             else:
                 row = {k: v for k, v in dict(row).items() if k != "inserted"}
         return self._serialize(row), created
+
+    def set_original_file_reference(self, document_id: str, reference: str) -> None:
+        parsed_id = UUID(document_id)
+        with self.pool.connection() as connection, connection.transaction():
+            connection.execute(
+                """UPDATE medical_documents
+                   SET original_file_reference = %s, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = %s""",
+                (reference, parsed_id),
+            )
 
     def list_for_encounter(
         self, encounter_id: str, *, verify_exists: bool = True

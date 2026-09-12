@@ -345,8 +345,8 @@ class EncounterRepository:
                    ON CONFLICT (encounter_id) DO UPDATE SET
                      draft_en = EXCLUDED.draft_en,
                      draft_hi = EXCLUDED.draft_hi,
-                     reasoning_en = EXCLUDED.reasoning_en,
-                     reasoning_hi = EXCLUDED.reasoning_hi,
+                     reasoning_en = COALESCE(EXCLUDED.reasoning_en, encounter_summaries.reasoning_en),
+                     reasoning_hi = COALESCE(EXCLUDED.reasoning_hi, encounter_summaries.reasoning_hi),
                      status = EXCLUDED.status,
                      model_meta = EXCLUDED.model_meta,
                      updated_at = CURRENT_TIMESTAMP

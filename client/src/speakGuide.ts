@@ -30,6 +30,63 @@ export type SpeakHandle = {
   stop: () => void;
 };
 
+/** Instant local playback for the fixed Module A opener (no live TTS round-trip). */
+export function playCachedOpener(language: Language): SpeakHandle {
+  const src =
+    language === "hi"
+      ? "/audio/opener-hi.mp3"
+      : language === "hinglish"
+        ? "/audio/opener-hinglish.mp3"
+        : "/audio/opener-en.mp3";
+
+  let resolveStarted!: () => void;
+  let resolveDuration!: (ms: number) => void;
+  const started = new Promise<void>((r) => {
+    resolveStarted = r;
+  });
+  const durationMs = new Promise<number>((r) => {
+    resolveDuration = r;
+  });
+
+  stopSpeaking();
+  const token = playToken;
+
+  void (async () => {
+    try {
+      if (token !== playToken) return;
+      const audio = new Audio(src);
+      currentAudio = audio;
+      currentUrl = null;
+
+      await new Promise<void>((resolve, reject) => {
+        audio.onloadedmetadata = () => resolve();
+        audio.onerror = () => reject(new Error("opener audio load failed"));
+      });
+      if (token !== playToken) return;
+
+      resolveDuration(
+        Number.isFinite(audio.duration) && audio.duration > 0
+          ? Math.round(audio.duration * 1000)
+          : 0,
+      );
+
+      audio.onended = () => {
+        if (token === playToken) {
+          currentAudio = null;
+        }
+      };
+      await audio.play();
+      resolveStarted();
+    } catch (err) {
+      console.warn("Cached opener play failed", err);
+      resolveStarted();
+      resolveDuration(0);
+    }
+  })();
+
+  return { started, durationMs, stop: stopSpeaking };
+}
+
 /** Speak via Cartesia (Kabir). Typing should wait for `started`. */
 export function speakGuide(
   text: string,

@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Language } from "./sessionTypes";
 import type { BodyRegionId, OrganSystemId } from "./bodyRegions";
 import { REGION_LABELS, SYSTEM_LABELS } from "./bodyRegions";
 import type { HistoryEntry } from "./AnatomyPanel";
 import AnatomyModel from "./AnatomyModel";
 import VoiceBlob from "./VoiceBlob";
+import HistoryDocUpload, {
+  DocumentResultModal,
+  type UploadedDoc,
+} from "./HistoryDocUpload";
 import "./InterviewScene.css";
 
 type ThemeMode = "dark" | "light";
@@ -12,7 +16,6 @@ type ThemeMode = "dark" | "light";
 type Props = {
   language: Language;
   tokenNo: string;
-  progress: number;
   complete: boolean;
   fields: HistoryEntry[];
   activeRegions: BodyRegionId[];
@@ -27,11 +30,21 @@ type Props = {
   typing: boolean;
   options: string[];
   revealOptions: boolean;
+  micArmed: boolean;
+  speakLabel: string;
+  skipLabel: string;
   doneSummary: string;
   doneLabel: string;
   continueLabel: string;
   stopLabel: string;
+  patientId: string | null;
+  encounterId: string | null;
+  docs: UploadedDoc[];
+  onDocUploaded: (doc: UploadedDoc) => void;
   onTap: (label: string) => void;
+  onSpeakStart: () => void;
+  onSpeakEnd: () => void;
+  onSkip: () => void;
   onStop: () => void;
   onContinue: () => void;
 };
@@ -39,6 +52,66 @@ type Props = {
 const NAV_STEPS_EN = ["Welcome", "Identify", "Consent", "History", "Scan", "Summary"];
 const NAV_STEPS_HI = ["स्वागत", "पहचान", "सहमति", "इतिहास", "स्कैन", "सारांश"];
 const THEME_KEY = "ayuvaani-theme";
+
+// Small colored accent icons for the "recent answers" rows — cycles through a
+// warm palette so each logged answer reads at a glance, like a clinical
+// dashboard card rather than a plain bullet list.
+const FIELD_ACCENTS = [
+  { color: "#3f9b6b", shape: "wave" as const },
+  { color: "#c9564f", shape: "pulse" as const },
+  { color: "#d99a52", shape: "bars" as const },
+  { color: "#2f8f96", shape: "wave" as const },
+  { color: "#7a63b8", shape: "wave" as const },
+];
+
+function FieldAccentIcon({ index }: { index: number }) {
+  const accent = FIELD_ACCENTS[index % FIELD_ACCENTS.length];
+  return (
+    <span
+      className="med-answer-icon"
+      style={{ color: accent.color, background: `${accent.color}1f` }}
+      aria-hidden
+    >
+      {accent.shape === "bars" ? (
+        <svg viewBox="0 0 28 16" width="26" height="15" fill="none">
+          {[3, 8, 4, 11, 6].map((h, i) => (
+            <rect
+              key={i}
+              x={i * 5.5}
+              y={16 - h}
+              width="3.4"
+              height={h}
+              rx="1.2"
+              fill="currentColor"
+              opacity={0.55 + i * 0.09}
+            />
+          ))}
+        </svg>
+      ) : accent.shape === "pulse" ? (
+        <svg viewBox="0 0 28 16" width="26" height="15" fill="none">
+          <path
+            d="M0 9h5l2.5-6L11 14l2.5-9L16 9h12"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+          />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 28 16" width="26" height="15" fill="none">
+          <path
+            d="M0 10c3 0 3-6 6-6s3 8 6 8 3-9 6-9 3 7 6 7 3-4 4-4"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            fill="none"
+          />
+        </svg>
+      )}
+    </span>
+  );
+}
 
 function readStoredTheme(): ThemeMode {
   try {
@@ -53,7 +126,6 @@ function readStoredTheme(): ThemeMode {
 export default function InterviewScene({
   language,
   tokenNo,
-  progress,
   complete,
   fields,
   activeRegions,
@@ -68,19 +140,38 @@ export default function InterviewScene({
   typing,
   options,
   revealOptions,
+  micArmed,
+  speakLabel,
+  skipLabel,
   doneSummary,
   doneLabel,
   continueLabel,
   stopLabel,
+  patientId,
+  encounterId,
+  docs,
+  onDocUploaded,
   onTap,
+  onSpeakStart,
+  onSpeakEnd,
+  onSkip,
   onStop,
   onContinue,
 }: Props) {
   const lang = language === "hi" ? "hi" : "en";
   const navSteps = lang === "hi" ? NAV_STEPS_HI : NAV_STEPS_EN;
-  const question = complete ? doneSummary || doneLabel : displayText || aiHint;
+  // Never replace the clinical question with a bare "listening" state.
+  const question = complete
+    ? doneSummary || doneLabel
+    : displayText || aiHint;
   const showMcq = !complete && revealOptions && options.length > 0;
   const [theme, setTheme] = useState<ThemeMode>(() => readStoredTheme());
+  const [activeDoc, setActiveDoc] = useState<UploadedDoc | null>(null);
+  const [typedAnswer, setTypedAnswer] = useState("");
+
+  useEffect(() => {
+    setTypedAnswer("");
+  }, [displayText, options.join("|")]);
 
   useEffect(() => {
     try {
@@ -114,15 +205,27 @@ export default function InterviewScene({
     [activeSystems, lang],
   );
 
-  const listeningState = userHearing ? "listening" : botSpeaking ? "speaking" : typing ? "thinking" : "idle";
+  const listeningState = userHearing
+    ? "listening"
+    : botSpeaking
+      ? "speaking"
+      : typing
+        ? "thinking"
+        : "idle";
   const stateLabel =
     lang === "hi"
-      ? { listening: "सुन रहा हूँ…", speaking: "बोल रहा हूँ…", thinking: "सोच रहा हूँ…", idle: sessionStatus }[
-          listeningState
-        ]
-      : { listening: "Listening…", speaking: "Speaking…", thinking: "Thinking…", idle: sessionStatus }[
-          listeningState
-        ];
+      ? {
+          listening: "सुन रहा हूँ…",
+          speaking: "बोल रहा हूँ…",
+          thinking: "अगला प्रश्न…",
+          idle: sessionStatus,
+        }[listeningState]
+      : {
+          listening: "Listening…",
+          speaking: "Speaking…",
+          thinking: "Next question…",
+          idle: sessionStatus,
+        }[listeningState];
 
   const themeLabel =
     theme === "light"
@@ -134,7 +237,7 @@ export default function InterviewScene({
         : "Light mode";
 
   return (
-    <div className={`med-shell med-shell--${theme} ${listeningState}`} data-theme={theme}>
+    <div className={`med-shell med-shell--${theme}`} data-theme={theme}>
       <header className="med-top">
         <div className="med-brand">
           <span className="med-mark" aria-hidden>
@@ -195,9 +298,14 @@ export default function InterviewScene({
             {lang === "hi" ? "टोकन" : "Token"} <b>{tokenNo}</b>
           </p>
           {!complete ? (
-            <button type="button" className="med-end" onClick={onStop}>
-              {stopLabel}
-            </button>
+            <>
+              <button type="button" className="med-end ghost" onClick={onSkip}>
+                {skipLabel}
+              </button>
+              <button type="button" className="med-end" onClick={onStop}>
+                {stopLabel}
+              </button>
+            </>
           ) : (
             <button type="button" className="med-end primary" onClick={onContinue}>
               {continueLabel}
@@ -213,40 +321,28 @@ export default function InterviewScene({
       ) : null}
 
       <div className="med-body">
-        <aside className="med-aside">
-          <div className="med-card">
-            <p className="med-card-label">{lang === "hi" ? "सत्र" : "Session"}</p>
-            <div className="med-progress-row">
-              <div className="med-progress-ring" style={{ "--pct": progress } as CSSProperties}>
-                <span>{progress}%</span>
-              </div>
-              <div>
-                <p className="med-card-title">{lang === "hi" ? "प्रगति" : "Progress"}</p>
-                <p className="med-card-sub">
-                  {fields.length} {lang === "hi" ? "जवाब दर्ज" : "answers recorded"}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="med-card">
+        <aside className="med-aside med-rail">
+          <section className="med-rail-section">
             <p className="med-card-label">{lang === "hi" ? "हाल के जवाब" : "Recent answers"}</p>
             {recentFields.length ? (
               <ul className="med-answer-list">
                 {recentFields.map((f, i) => (
                   <li key={`${f.field ?? i}-${i}`}>
-                    <span className="med-answer-field">{f.field ?? f.section ?? "—"}</span>
-                    <span className="med-answer-value">{f.value ?? "—"}</span>
+                    <span className="med-answer-text">
+                      <span className="med-answer-field">{f.field ?? f.section ?? "—"}</span>
+                      <span className="med-answer-value">{f.value ?? "—"}</span>
+                    </span>
+                    <FieldAccentIcon index={i} />
                   </li>
                 ))}
               </ul>
             ) : (
               <p className="med-empty">{lang === "hi" ? "अभी तक कोई जवाब नहीं" : "No answers yet"}</p>
             )}
-          </div>
+          </section>
 
-          <div className="med-card">
-            <p className="med-card-label">{lang === "hi" ? "फ़ोकस क्षेत्र" : "Focus areas"}</p>
+          <section className="med-rail-section">
+            <p className="med-card-label">{lang === "hi" ? "शरीर फ़ोकस" : "Body focus"}</p>
             <div className="med-chip-row">
               {regionChips.length
                 ? regionChips.map((c) => (
@@ -265,18 +361,58 @@ export default function InterviewScene({
                 ))}
               </div>
             ) : null}
+          </section>
+
+          <HistoryDocUpload
+            language={language}
+            patientId={patientId}
+            encounterId={encounterId}
+            docs={docs}
+            onUploaded={onDocUploaded}
+            onOpen={setActiveDoc}
+          />
+
+          <div className="med-rail-trust">
+            <span className="med-rail-trust-icon" aria-hidden>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
+                <path
+                  d="M12 3l7 3v5c0 4.5-3 7.9-7 10-4-2.1-7-5.5-7-10V6l7-3Z"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M9 12l2 2 4-4"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+            <p>
+              {lang === "hi"
+                ? "आपके सभी जवाब गोपनीय रहते हैं और केवल आपके डॉक्टर के साथ साझा होते हैं।"
+                : "Every answer stays confidential and is shared only with your doctor."}
+            </p>
           </div>
         </aside>
 
         <main className="med-stage">
+          <div className="med-stage-glow" aria-hidden />
+          <p className="med-stage-caption">
+            {lang === "hi" ? "शारीरिक मानचित्र" : "Anatomical map"}
+          </p>
           <AnatomyModel activeRegions={activeRegions} theme={theme} className="med-anatomy" />
         </main>
 
         <section className="med-panel">
           <div className="med-panel-head">
-            <VoiceBlob state={listeningState} size={104} />
-            <p className="med-panel-eyebrow">ayuvaani AI</p>
-            <p className="med-panel-state">{stateLabel}</p>
+            <VoiceBlob state={listeningState} size={56} />
+            <div className="med-panel-titles">
+              <p className="med-panel-eyebrow">ayuvaani</p>
+              <p className="med-panel-state">{stateLabel}</p>
+            </div>
           </div>
 
           <p className="med-question">
@@ -307,13 +443,79 @@ export default function InterviewScene({
               <p className="med-mcq-label">{lang === "hi" ? "सारांश" : "Summary"}</p>
               <p className="med-summary-text">{doneSummary || doneLabel}</p>
             </div>
-          ) : null}
+          ) : (
+            <div className="med-actions">
+              <form
+                className="med-type"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const text = typedAnswer.trim();
+                  if (!text || botSpeaking) return;
+                  onTap(text);
+                  setTypedAnswer("");
+                }}
+              >
+                <label className="med-mcq-label" htmlFor="med-type-input">
+                  {lang === "hi" ? "या टाइप करके लिखें" : "Or type your answer"}
+                </label>
+                <div className="med-type-row">
+                  <input
+                    id="med-type-input"
+                    className="med-type-input"
+                    type="text"
+                    value={typedAnswer}
+                    disabled={botSpeaking}
+                    placeholder={
+                      lang === "hi"
+                        ? "अपना जवाब यहाँ लिखें…"
+                        : "Type your answer here…"
+                    }
+                    autoComplete="off"
+                    enterKeyHint="send"
+                    onChange={(e) => setTypedAnswer(e.target.value)}
+                  />
+                  <button
+                    type="submit"
+                    className="med-type-send"
+                    disabled={botSpeaking || !typedAnswer.trim()}
+                  >
+                    {lang === "hi" ? "भेजें" : "Send"}
+                  </button>
+                </div>
+              </form>
+              <button
+                type="button"
+                className={`med-speak ${micArmed ? "is-live" : ""}`}
+                disabled={botSpeaking}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  onSpeakStart();
+                }}
+                onPointerUp={onSpeakEnd}
+                onPointerLeave={onSpeakEnd}
+                onPointerCancel={onSpeakEnd}
+              >
+                {speakLabel}
+              </button>
+              <button type="button" className="med-skip" onClick={onSkip}>
+                {skipLabel}
+              </button>
+            </div>
+          )}
 
           <footer className="med-panel-foot">
-            {lang === "hi" ? "बोलें या टैप करके जवाब दें" : "Speak or tap an option to answer"}
+            {lang === "hi"
+              ? "टैप करें, टाइप करें, या बोलने के लिए बटन दबाएँ"
+              : "Tap, type, or hold Speak for voice"}
           </footer>
         </section>
       </div>
+
+      <DocumentResultModal
+        language={language}
+        doc={activeDoc}
+        onClose={() => setActiveDoc(null)}
+      />
     </div>
   );
 }

@@ -10,6 +10,7 @@ import MetricsPanel from "./MetricsPanel";
 import type { MetricsSnapshot, SessionEval } from "./MetricsPanel";
 import type { HistoryEntry } from "./AnatomyPanel";
 import InterviewScene from "./InterviewScene";
+import type { UploadedDoc } from "./HistoryDocUpload";
 import {
   detectBodyRegions,
   detectOrganSystems,
@@ -34,12 +35,11 @@ import {
   ConsentScreen,
   FlowAmbience,
   IdentifyScreen,
-  ScanScreen,
   StubStepScreen,
   SummaryScreen,
   WelcomeScreen,
 } from "./FlowScreens";
-import { stopSpeaking } from "./speakGuide";
+import { playCachedOpener, stopSpeaking } from "./speakGuide";
 import "./App.css";
 
 type TouchPrompt = {
@@ -173,14 +173,17 @@ const copy = {
     ayush: "Include AYUSH history",
     start: "Begin interview",
     stop: "End session",
+    skip: "Go to summary",
+    speak: "Hold to speak",
+    speakOn: "Listening — release when done",
     connecting: "Connecting…",
     listening: "Listening",
     ready: "Ready",
     preparing: "Preparing question…",
     triage: "Priority alert sent to triage",
-    done: "History recorded. Next: scan any old papers (or skip).",
+    done: "History recorded. Review your summary next.",
     doneTitle: "Interview complete",
-    restart: "Continue to documents",
+    restart: "Continue to summary",
     profileHint: "Live chart",
     bodyHint: "Anatomy",
   },
@@ -191,14 +194,17 @@ const copy = {
     ayush: "आयुष इतिहास शामिल करें",
     start: "साक्षात्कार शुरू करें",
     stop: "सत्र समाप्त",
+    skip: "सारांश पर जाएँ",
+    speak: "बोलने के लिए दबाएँ",
+    speakOn: "सुन रहा हूँ — छोड़ें जब पूरा हो",
     connecting: "कनेक्ट हो रहा है…",
     listening: "सुन रहे हैं",
     ready: "तैयार",
     preparing: "प्रश्न तैयार हो रहा है…",
     triage: "आपातकालीन अलर्ट भेज दिया गया",
-    done: "इतिहास दर्ज हो गया। आगे: पुराने कागज़ात स्कैन करें (या छोड़ें)।",
+    done: "इतिहास दर्ज हो गया। आगे सारांश देखें।",
     doneTitle: "साक्षात्कार पूर्ण",
-    restart: "कागज़ात पर जाएँ",
+    restart: "सारांश पर जाएँ",
     profileHint: "लाइव चार्ट",
     bodyHint: "शरीर",
   },
@@ -209,14 +215,17 @@ const copy = {
     ayush: "AYUSH history include karein",
     start: "Interview shuru karein",
     stop: "Session end",
+    skip: "Summary par jao",
+    speak: "Bolne ke liye dabayein",
+    speakOn: "Sun raha hoon — chhod dein jab complete",
     connecting: "Connecting…",
     listening: "Listening",
     ready: "Ready",
     preparing: "Question prepare ho raha hai…",
     triage: "Emergency alert bhej diya",
-    done: "History save ho gayi. Ab papers scan karein ya skip karein.",
+    done: "History save ho gayi. Ab summary dekhein.",
     doneTitle: "Interview complete",
-    restart: "Documents par jao",
+    restart: "Summary par jao",
     profileHint: "Live chart",
     bodyHint: "Body map",
   },
@@ -241,6 +250,7 @@ export default function App() {
   });
   const [touch, setTouch] = useState<TouchPrompt>({ question: "", options: [] });
   const [fields, setFields] = useState<HistoryEntry[]>([]);
+  const [uploadedDocs, setUploadedDocs] = useState<UploadedDoc[]>([]);
   const [activeRegions, setActiveRegions] = useState<BodyRegionId[]>([]);
   const [activeSystems, setActiveSystems] = useState<OrganSystemId[]>([]);
   const [redFlag, setRedFlag] = useState<RedFlag | null>(null);
@@ -248,7 +258,9 @@ export default function App() {
   const [doneSummary, setDoneSummary] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [userHearing, setUserHearing] = useState(false);
+  const [micArmed, setMicArmed] = useState(false);
   const [botSpeaking, setBotSpeaking] = useState(false);
+  const micArmedRef = useRef(false);
   const [targetText, setTargetText] = useState("");
   const [displayText, setDisplayText] = useState("");
   const [typing, setTyping] = useState(false);
@@ -318,12 +330,22 @@ export default function App() {
 
   const setTarget = useCallback((next: string, resetDisplay = false) => {
     const cleaned = dedupePatientText(next);
+    if (!cleaned) return;
+    // Already showing this caption fully — do not wipe/retype.
+    if (
+      cleaned === targetRef.current &&
+      cleaned === displayRef.current
+    ) {
+      return;
+    }
     targetRef.current = cleaned;
     setTargetText(cleaned);
     if (resetDisplay) {
-      displayRef.current = "";
-      setDisplayText("");
-      setRevealOptions(false);
+      // Snap instantly (no typewriter) so questions don't "type twice".
+      displayRef.current = cleaned;
+      setDisplayText(cleaned);
+      setTyping(false);
+      speechSyncRef.current = null;
     }
   }, []);
 
@@ -334,7 +356,7 @@ export default function App() {
     }
   }, []);
 
-  /** Start typewriter paced to estimated speech length (keeps text from racing ahead of voice). */
+  /** Snap caption instantly (no typewriter) — used for wrap-up / speech-synced lines. */
   const releaseCaptionWithSpeech = useCallback(
     (caption: string) => {
       const cleaned = dedupePatientText(caption);
@@ -342,14 +364,7 @@ export default function App() {
       clearCaptionReleaseTimer();
       holdCaptionUntilSpeechRef.current = false;
       pendingCaptionRef.current = cleaned;
-      const parts = graphemes(cleaned);
-      // ~13 chars/sec spoken + small buffer so text never finishes before audio.
-      const durationMs = Math.max(2200, Math.round(parts.length * 95));
-      speechSyncRef.current = {
-        startMs: performance.now(),
-        durationMs,
-        parts,
-      };
+      speechSyncRef.current = null;
       streamBufRef.current = cleaned;
       setTarget(cleaned, true);
       setRevealOptions(true);
@@ -359,34 +374,53 @@ export default function App() {
 
   const beginBotTurn = useCallback(() => {
     if (completeRef.current) return;
-    streamBufRef.current = "";
-    setTarget("", true);
+    // Keep the current question + options on screen while the next turn prepares.
     setTyping(true);
-    setRevealOptions(false);
-  }, [setTarget]);
+  }, []);
+
+  const setMicLive = useCallback(
+    (on: boolean) => {
+      micArmedRef.current = on;
+      setMicArmed(on);
+      try {
+        client?.enableMic(on);
+      } catch {
+        /* ignore */
+      }
+      if (!on) setUserHearing(false);
+    },
+    [client],
+  );
 
   const endSession = useCallback(async () => {
-    if (!client || endingRef.current) return;
+    if (endingRef.current) return;
     endingRef.current = true;
     clearEndTimer();
-    try {
-      await client.disconnect();
-    } catch {
-      /* ignore */
-    }
-    const id = encounterIdRef.current;
-    if (id) {
+    stopSpeaking();
+    setMicLive(false);
+    setUserHearing(false);
+    if (client) {
       try {
-        await setEncounterStep(id, "scan");
+        await client.disconnect();
       } catch {
         /* ignore */
       }
     }
-    setSessionStep("scan");
+    const id = encounterIdRef.current;
+    if (id) {
+      try {
+        await setEncounterStep(id, "summary");
+      } catch {
+        /* ignore */
+      }
+    }
+    setSessionStep("summary");
     setComplete(false);
     completeRef.current = false;
+    setTouch({ question: "", options: [] });
+    setRevealOptions(false);
     endingRef.current = false;
-  }, [client, clearEndTimer]);
+  }, [client, clearEndTimer, setMicLive]);
 
   const advanceStep = useCallback(
     async (step: SessionStep) => {
@@ -470,6 +504,7 @@ export default function App() {
     setPatientId(null);
     setAbhaId("");
     setFields([]);
+    setUploadedDocs([]);
     setActiveRegions([]);
     setActiveSystems([]);
     setRedFlag(null);
@@ -540,14 +575,28 @@ export default function App() {
 
   useRTVIClientEvent(
     RTVIEvent.UserStartedSpeaking,
-    useCallback(() => setUserHearing(true), []),
+    useCallback(() => {
+      // Ignore ambient VAD when mic is not intentionally armed (push-to-talk).
+      if (!micArmedRef.current) return;
+      setUserHearing(true);
+    }, []),
   );
   useRTVIClientEvent(
     RTVIEvent.UserStoppedSpeaking,
     useCallback(() => {
       setUserHearing(false);
       userStoppedAtRef.current = performance.now();
-    }, []),
+      // Auto release push-to-talk after an utterance ends.
+      if (micArmedRef.current) {
+        try {
+          client?.enableMic(false);
+        } catch {
+          /* ignore */
+        }
+        micArmedRef.current = false;
+        setMicArmed(false);
+      }
+    }, [client]),
   );
 
   useRTVIClientEvent(
@@ -631,33 +680,24 @@ export default function App() {
       (data: { text?: string }) => {
         const chunk = data?.text ?? "";
         if (!chunk) return;
-        streamBufRef.current += chunk;
-        // While holding for audio, only buffer — never paint early.
+        // Questions come from touch_prompt — don't stream LLM tokens into the caption
+        // (that was re-typing / duplicating the opener).
         if (holdCaptionUntilSpeechRef.current) {
+          streamBufRef.current += chunk;
           pendingCaptionRef.current = cleanPatientText(streamBufRef.current);
           return;
         }
-        setTarget(streamBufRef.current, false);
+        streamBufRef.current += chunk;
       },
-      [setTarget],
+      [],
     ),
   );
 
   useRTVIClientEvent(
     RTVIEvent.BotTtsText,
-    useCallback(
-      (data: { text?: string }) => {
-        const chunk = data?.text ?? "";
-        if (!chunk) return;
-        // Prefer the fixed pending caption; don't let TTS tokens paint early.
-        if (holdCaptionUntilSpeechRef.current) return;
-        if (streamBufRef.current.length > 8) return;
-        streamBufRef.current =
-          `${streamBufRef.current}${streamBufRef.current ? " " : ""}${chunk}`.trim();
-        setTarget(streamBufRef.current, false);
-      },
-      [setTarget],
-    ),
+    useCallback((_data: { text?: string }) => {
+      // Caption is driven by touch_prompt / session_complete, not TTS tokens.
+    }, []),
   );
 
   useRTVIClientEvent(
@@ -665,6 +705,15 @@ export default function App() {
     useCallback(() => {
       setBotSpeaking(true);
       botSpeakingRef.current = true;
+      // Always mute while TTS plays — OPD noise must not interrupt.
+      try {
+        client?.enableMic(false);
+      } catch {
+        /* ignore */
+      }
+      micArmedRef.current = false;
+      setMicArmed(false);
+      setUserHearing(false);
       if (userStoppedAtRef.current != null) {
         const ms = Math.round(performance.now() - userStoppedAtRef.current);
         userStoppedAtRef.current = null;
@@ -692,7 +741,7 @@ export default function App() {
       if (!completeRef.current) return;
       wrapUpAudioRef.current = true;
       clearEndTimer();
-    }, [clearEndTimer, clearCaptionReleaseTimer, releaseCaptionWithSpeech]),
+    }, [client, clearEndTimer, clearCaptionReleaseTimer, releaseCaptionWithSpeech]),
   );
 
   useRTVIClientEvent(
@@ -700,6 +749,7 @@ export default function App() {
     useCallback(() => {
       setBotSpeaking(false);
       botSpeakingRef.current = false;
+      // Stay muted until the patient presses Hold-to-speak (push-to-talk).
       clearCaptionReleaseTimer();
       speechSyncRef.current = null;
       // Snap any remaining typewriter to full caption once speech ends.
@@ -727,23 +777,24 @@ export default function App() {
           const options = Array.isArray(data.options)
             ? (data.options as string[])
             : [];
-          setTouch({
-            question,
-            options,
-            section: data.section ? String(data.section) : undefined,
-          });
-          setRevealOptions(options.length > 0);
+          // Keep previous question/options on screen if bot sends an empty clear mid-turn.
+          if (!question && options.length === 0) {
+            return;
+          }
+          setTouch((prev) => ({
+            question: question || prev.question,
+            options: options.length ? options : prev.options,
+            section: data.section ? String(data.section) : prev.section,
+          }));
+          if (options.length) setRevealOptions(true);
           if (question) {
+            // Show full question immediately; skip if already on screen.
             pendingCaptionRef.current = question;
-            // Never paint the question before audio — keep holding for speech sync.
-            if (!botSpeakingRef.current) {
-              holdCaptionUntilSpeechRef.current = true;
-              streamBufRef.current = "";
-            } else {
-              holdCaptionUntilSpeechRef.current = false;
-              streamBufRef.current = question;
-              releaseCaptionWithSpeech(question);
-            }
+            holdCaptionUntilSpeechRef.current = false;
+            streamBufRef.current = question;
+            setTarget(question, true);
+            setTyping(false);
+            if (options.length) setRevealOptions(true);
           }
         } else if (type === "history_update") {
           if (Array.isArray(data.fields)) {
@@ -774,6 +825,7 @@ export default function App() {
           completeRef.current = true;
           wrapUpAudioRef.current = false;
           setComplete(true);
+          setMicLive(false);
           setTouch({ question: "", options: [] });
           setRevealOptions(false);
           const summary = cleanPatientText(String(data.summary ?? ""));
@@ -796,7 +848,7 @@ export default function App() {
           }
         }
       },
-      [releaseCaptionWithSpeech, scheduleEnd, absorbClinical],
+      [releaseCaptionWithSpeech, scheduleEnd, absorbClinical, setMicLive, setTarget],
     ),
   );
 
@@ -853,20 +905,24 @@ export default function App() {
     setClientMetrics([]);
     turnSamplesRef.current = [];
     setTurnTiming({ lastTurnMs: null, avgTurnMs: null, samples: 0 });
-    // Seed tap choices only — question text waits for bot audio (speech-synced).
+    // Seed tap choices + question text immediately (touch-first; don't wait on TTS).
     const seed = firstChiefPrompt(language);
     setTouch(seed);
     setUserHearing(false);
     setBotSpeaking(false);
     botSpeakingRef.current = false;
+    micArmedRef.current = false;
+    setMicArmed(false);
     pendingCaptionRef.current = seed.question;
-    holdCaptionUntilSpeechRef.current = true;
-    streamBufRef.current = "";
+    holdCaptionUntilSpeechRef.current = false;
+    streamBufRef.current = seed.question;
     speechSyncRef.current = null;
     clearCaptionReleaseTimer();
-    setTarget("", true);
+    setTarget(seed.question, true);
     setTyping(false);
     setRevealOptions(true);
+    // Play pre-baked opener audio immediately (no Cartesia round-trip).
+    void playCachedOpener(language).started;
 
     try {
       if (transportState !== "disconnected") {
@@ -886,7 +942,8 @@ export default function App() {
           },
         },
       });
-      client.enableMic(true);
+      // Push-to-talk: mic stays off until patient presses Speak.
+      client.enableMic(false);
     } catch (e) {
       console.error(e);
       const detail =
@@ -899,13 +956,9 @@ export default function App() {
     }
   };
 
-  const handleDisconnect = async () => {
-    if (!client) return;
-    await client.disconnect();
-  };
-
   const handleTap = (label: string) => {
     if (!client) return;
+    setMicLive(false);
     absorbClinical(label);
     const section = touch.section || "chief_complaint";
     const field =
@@ -938,31 +991,24 @@ export default function App() {
       });
     }
     client.sendClientMessage("touch_answer", { label });
-    setTouch((prev) => ({ ...prev, options: [] }));
-    setRevealOptions(false);
+    // Keep options visible until the next question arrives (avoid blank listening UI).
+    setTyping(true);
   };
 
   const showCaret = typing && displayText.length < targetText.length;
+  const visibleQuestion =
+    displayText || touch.question || (complete ? doneSummary : "");
   const sessionStatus = complete
     ? t.doneTitle
-    : userHearing
+    : micArmed
       ? t.listening
-      : typing && !displayText
-        ? t.preparing
-        : displayText
+      : botSpeaking
+        ? language === "hi"
+          ? "बोल रहा हूँ…"
+          : "Speaking…"
+        : visibleQuestion
           ? t.ready
           : t.preparing;
-
-  const HISTORY_STEP_COUNT = 6;
-  const capturedSections = new Set(
-    fields.map((f) => (f.section || "").toLowerCase()).filter(Boolean),
-  );
-  const progress = Math.min(
-    100,
-    Math.round((capturedSections.size / HISTORY_STEP_COUNT) * 100) ||
-    (fields.length ? Math.min(90, fields.length * 12) : 0) ||
-    (complete ? 100 : 8),
-  );
 
   const tokenNo = (() => {
     if (!encounterId) return "—";
@@ -971,21 +1017,10 @@ export default function App() {
     return String((n % 900) + 100).padStart(3, "0");
   })();
 
-  const aiHint = userHearing
-    ? language === "hi"
-      ? "सुन रहा हूँ…"
-      : "Listening…"
-    : touch.options.length > 0 && !botSpeaking
-      ? language === "hi"
-        ? "बोलें या नीचे चुनें"
-        : "Speak or tap below"
-      : botSpeaking || typing
-        ? language === "hi"
-          ? "जवाब तैयार हो रहा है…"
-          : "Getting the next question…"
-        : language === "hi"
-          ? "बोलें या छूकर चुनें"
-          : "Speak or tap";
+  const aiHint =
+    language === "hi"
+      ? "बोलें या नीचे टैप करें"
+      : "Speak or tap below";
 
   return (
     <div
@@ -1038,14 +1073,17 @@ export default function App() {
             )}
 
             {sessionStep === "scan" && (
-              <ScanScreen
+              <StubStepScreen
                 step={sessionStep}
                 language={language}
                 setLanguage={setLanguage}
-                patientId={patientId}
-                encounterId={encounterId}
-                onContinue={() => void advanceStep("summary")}
-                onSkip={() => void advanceStep("summary")}
+                titleHi="दस्तावेज़ इतिहास में अपलोड हो चुके हैं"
+                titleEn="Documents upload during history"
+                bodyHi="कागज़ात पहले ही इतिहास स्क्रीन पर अपलोड कर सकते हैं। सारांश पर जाएँ।"
+                bodyEn="You can upload papers on the history screen. Continue to the summary."
+                primaryHi="सारांश पर जाएँ"
+                primaryEn="Go to summary"
+                onPrimary={() => void advanceStep("summary")}
               />
             )}
 
@@ -1055,6 +1093,7 @@ export default function App() {
                 language={language}
                 setLanguage={setLanguage}
                 encounterId={encounterId}
+                uploadedDocs={uploadedDocs}
                 onConfirm={() => setSessionStep("submit")}
               />
             )}
@@ -1112,7 +1151,6 @@ export default function App() {
         <InterviewScene
           language={language}
           tokenNo={tokenNo}
-          progress={complete ? 100 : progress}
           complete={complete}
           fields={fields}
           activeRegions={activeRegions}
@@ -1124,26 +1162,44 @@ export default function App() {
                 : "Urgent symptoms flagged — please call staff."
               : null
           }
-          displayText={displayText}
+          displayText={visibleQuestion}
           showCaret={showCaret}
           aiHint={aiHint}
           sessionStatus={sessionStatus}
-          userHearing={userHearing}
+          userHearing={userHearing || micArmed}
           botSpeaking={botSpeaking}
           typing={typing}
           options={touch.options}
-          revealOptions={revealOptions}
+          revealOptions={revealOptions || touch.options.length > 0}
+          micArmed={micArmed}
+          speakLabel={micArmed ? t.speakOn : t.speak}
+          skipLabel={t.skip}
           doneSummary={doneSummary}
           doneLabel={t.done}
           continueLabel={t.restart}
           stopLabel={t.stop}
+          patientId={patientId}
+          encounterId={encounterId}
+          docs={uploadedDocs}
+          onDocUploaded={(doc) =>
+            setUploadedDocs((prev) => {
+              if (prev.some((d) => d.id === doc.id)) return prev;
+              return [...prev, doc];
+            })
+          }
           onTap={handleTap}
-          onStop={() => void handleDisconnect()}
+          onSpeakStart={() => {
+            if (complete || botSpeaking) return;
+            setMicLive(true);
+          }}
+          onSpeakEnd={() => setMicLive(false)}
+          onSkip={() => void endSession()}
+          onStop={() => void endSession()}
           onContinue={() => void endSession()}
         />
       )}
 
-      {!isConnected && (
+      {!isConnected && sessionStep !== "history" && (
         <MetricsPanel
           open={metricsOpen}
           onToggle={() => setMetricsOpen((v) => !v)}

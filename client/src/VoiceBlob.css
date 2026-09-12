@@ -1,8 +1,8 @@
 .voice-blob {
   --vb-size: 132px;
-  --vb-a: #4f8bff;
-  --vb-b: #7c6bff;
-  --vb-c: #9fd2ff;
+  --vb-a: #d99a52;
+  --vb-b: #e2b579;
+  --vb-c: #f0d3a8;
   position: relative;
   width: var(--vb-size);
   height: var(--vb-size);
@@ -15,7 +15,7 @@
   position: absolute;
   inset: -26%;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(79, 139, 255, 0.34), transparent 70%);
+  background: radial-gradient(circle, rgba(217, 154, 82, 0.34), transparent 70%);
   filter: blur(22px);
   animation: vb-breathe 4.6s ease-in-out infinite;
 }
@@ -24,7 +24,7 @@
   position: absolute;
   inset: 4%;
   border-radius: 50%;
-  border: 1px solid rgba(79, 139, 255, 0.35);
+  border: 1px solid rgba(217, 154, 82, 0.35);
   opacity: 0;
 }
 
@@ -43,10 +43,10 @@
     var(--vb-a) 100%
   );
   box-shadow:
-    0 0 34px 8px rgba(79, 139, 255, 0.4),
+    0 0 34px 8px rgba(217, 154, 82, 0.4),
     inset 0 0 24px rgba(255, 255, 255, 0.2),
-    inset 0 -14px 24px rgba(6, 10, 26, 0.3);
-  animation: vb-morph 9s ease-in-out infinite, vb-spin 16s linear infinite;
+    inset 0 -14px 24px rgba(36, 26, 19, 0.3);
+  animation: vb-morph 12s ease-in-out infinite;
 }
 
 .voice-blob__shine {
@@ -72,7 +72,7 @@
 .voice-blob__wave i {
   width: 3px;
   border-radius: 2px;
-  background: rgba(8, 12, 30, 0.55);
+  background: rgba(36, 26, 19, 0.55);
   animation: vb-wave 0.85s ease-in-out infinite;
   animation-delay: calc(var(--b) * 0.09s);
 }
@@ -84,9 +84,7 @@
 
 @keyframes vb-morph {
   0%, 100% { border-radius: 42% 58% 63% 37% / 45% 40% 60% 55%; }
-  25% { border-radius: 58% 42% 38% 62% / 55% 62% 38% 45%; }
-  50% { border-radius: 48% 52% 55% 45% / 38% 55% 45% 62%; }
-  75% { border-radius: 63% 37% 45% 55% / 60% 42% 58% 40%; }
+  50% { border-radius: 58% 42% 45% 55% / 55% 45% 55% 45%; }
 }
 
 @keyframes vb-spin {
@@ -108,26 +106,26 @@
 
 .voice-blob--listening .voice-blob__halo {
   animation-duration: 1.8s;
-  background: radial-gradient(circle, rgba(79, 139, 255, 0.55), transparent 70%);
+  background: radial-gradient(circle, rgba(217, 154, 82, 0.55), transparent 70%);
 }
 
 .voice-blob--listening .voice-blob__core {
-  animation-duration: 3.6s, 8s;
+  animation-duration: 3.6s;
   box-shadow:
-    0 0 48px 12px rgba(79, 139, 255, 0.6),
+    0 0 48px 12px rgba(217, 154, 82, 0.6),
     inset 0 0 24px rgba(255, 255, 255, 0.24),
-    inset 0 -14px 24px rgba(6, 10, 26, 0.25);
+    inset 0 -14px 24px rgba(36, 26, 19, 0.25);
 }
 
 /* ---------- speaking ---------- */
 
 .voice-blob--speaking .voice-blob__core {
   background: conic-gradient(from 210deg, var(--vb-b), var(--vb-a) 40%, var(--vb-c) 70%, var(--vb-b) 100%);
-  animation-duration: 5s, 10s;
+  animation-duration: 5s;
 }
 
 .voice-blob--speaking .voice-blob__ripple {
-  border-color: rgba(124, 107, 255, 0.4);
+  border-color: rgba(226, 181, 121, 0.4);
   animation: vb-ripple 1.8s ease-out infinite;
 }
 
@@ -144,7 +142,7 @@
 
 .voice-blob--thinking .voice-blob__core {
   filter: saturate(0.55) brightness(0.85);
-  animation-duration: 5s, 5s;
+  animation-duration: 5s;
 }
 
 .voice-blob--thinking .voice-blob__halo {

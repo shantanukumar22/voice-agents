@@ -35,6 +35,7 @@ export type Encounter = {
   status: string;
   sessionStep: string;
   language: string;
+  ayushMode?: boolean;
   displayName: string | null;
   submittedAt: string | null;
   updatedAt: string | null;
@@ -45,6 +46,8 @@ export type EncounterSummary = {
   encounterId: string;
   draftEn: string;
   draftHi: string;
+  reasoningEn?: string;
+  reasoningHi?: string;
   status: string;
 };
 
@@ -61,17 +64,24 @@ export type HistoryField = {
   updatedAt?: string;
 };
 
+export type MedicalDocument = {
+  id?: string;
+  document_type?: string;
+  confidence_score?: number;
+  clinical_document_date?: string;
+  extraction_timestamp?: string;
+  original_file_reference?: string | null;
+  summary?: string;
+  fileName?: string | null;
+  hasFile?: boolean;
+  fileUrl?: string;
+};
+
 export type DoctorReport = {
   encounter: Encounter;
   summary: EncounterSummary;
   fields: HistoryField[];
-  documents: Array<{
-    id?: string;
-    document_type?: string;
-    confidence_score?: number;
-    clinical_document_date?: string;
-    extraction_timestamp?: string;
-  }>;
+  documents: MedicalDocument[];
   prescriptions: Array<{ id: string; items: unknown[]; notes: string }>;
   orders: Array<{ id: string; orderType: string; items: unknown[]; notes: string }>;
   followUps: Array<{
@@ -105,8 +115,15 @@ export function patchSummary(
   });
 }
 
-export function generateSummary(encounterId: string): Promise<EncounterSummary> {
-  return api(`/api/encounters/${encounterId}/summary/generate`, {
+export function generateSummary(
+  encounterId: string,
+  opts?: { includeReasoning?: boolean },
+): Promise<EncounterSummary> {
+  const q =
+    opts?.includeReasoning === false
+      ? "?include_reasoning=0"
+      : "?include_reasoning=1";
+  return api(`/api/encounters/${encounterId}/summary/generate${q}`, {
     method: "POST",
   });
 }
@@ -176,4 +193,25 @@ export function verifyHistoryField(
     method: "PATCH",
     body: JSON.stringify(body),
   });
+}
+
+/** Fetch original upload with staff auth headers (for preview / open). */
+export async function fetchDocumentFile(documentId: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/api/doctor/documents/${documentId}/file`, {
+    headers: {
+      "X-Staff-Role": STAFF_ROLE,
+      ...(STAFF_TOKEN ? { "X-Staff-Token": STAFF_TOKEN } : {}),
+    },
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = body.detail || JSON.stringify(body);
+    } catch {
+      /* ignore */
+    }
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return res.blob();
 }

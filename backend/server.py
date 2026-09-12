@@ -40,7 +40,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 from pipecat.transports.smallwebrtc.connection import IceServer
 from pipecat.transports.smallwebrtc.request_handler import (
@@ -74,7 +74,7 @@ from repositories.encounters import (
     EncounterRepository,
     SESSION_STEPS,
 )
-from services.summary_service import SummaryService
+from services.summary_service import SummaryService, FIELD_TO_SECTION, SECTION_ALIASES
 from models.clinical_schemas import HistorySection, HPIField, AyushField
 
 # Platform secrets in backend/.env; voice keys may still live in bot/.env for integrated serve.
@@ -118,6 +118,89 @@ def _remove_temp_file(path: str) -> None:
                 time.sleep(0.1)
             else:
                 logger.warning("Could not remove temporary OCR file: {}", path)
+
+
+def _upload_dir() -> Path:
+    configured = (os.getenv("UPLOAD_DIR") or "").strip()
+    root = Path(configured) if configured else (BACKEND_DIR / "uploads")
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _resolve_uploaded_file(reference: str | None) -> Path | None:
+    """Resolve a stored original_file_reference to an on-disk upload path."""
+    if not reference or not str(reference).strip():
+        return None
+    # Format: "<stored_name>" or "<stored_name>|<original_filename>"
+    stored = str(reference).strip().split("|", 1)[0].strip()
+    name = Path(stored).name
+    if not name or name in {".", ".."}:
+        return None
+    candidate = (_upload_dir() / name).resolve()
+    try:
+        candidate.relative_to(_upload_dir().resolve())
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def _display_file_name(reference: str | None) -> str | None:
+    if not reference or not str(reference).strip():
+        return None
+    parts = str(reference).strip().split("|", 1)
+    if len(parts) == 2 and parts[1].strip():
+        return Path(parts[1].strip()).name
+    name = Path(parts[0]).name
+    # Skip opaque uuid.ext keys for display when no original name was saved
+    return name if name and not (
+        len(name) > 36 and name[8] == "-" and name[13] == "-"
+    ) else name
+
+
+def _doc_ocr_summary(doc: dict[str, Any]) -> str:
+    for key in ("summary", "clinical_summary"):
+        val = doc.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    ocr = doc.get("ocr_result") or doc.get("complete_ocr_result") or {}
+    if isinstance(ocr, dict):
+        for key in ("clinical_summary", "summary", "clinical_notes"):
+            val = ocr.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        structured = ocr.get("structured_document")
+        if isinstance(structured, dict):
+            data = structured.get("data")
+            if isinstance(data, dict):
+                for key in ("clinical_summary", "summary", "clinical_notes", "remarks"):
+                    val = data.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+    data = doc.get("data") or doc.get("structured_data") or {}
+    if isinstance(data, dict):
+        for key in ("clinical_summary", "summary", "clinical_notes", "remarks"):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return ""
+
+
+def _enrich_document_for_doctor(doc: dict[str, Any]) -> dict[str, Any]:
+    out = dict(doc)
+    ref = out.get("original_file_reference")
+    path = _resolve_uploaded_file(str(ref) if ref else None)
+    out["summary"] = _doc_ocr_summary(out)
+    out["fileName"] = _display_file_name(str(ref) if ref else None)
+    out["hasFile"] = path is not None
+    if out.get("id"):
+        out["fileUrl"] = f"/api/doctor/documents/{out['id']}/file"
+    # Trim bulky OCR blobs from list payloads — summary is enough for the UI.
+    out.pop("ocr_result", None)
+    out.pop("complete_ocr_result", None)
+    out.pop("data", None)
+    out.pop("structured_data", None)
+    out.pop("extraction_errors", None)
+    return out
 
 
 
@@ -410,6 +493,119 @@ async def patch_encounter_step(encounter_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Encounter not found") from exc
 
 
+def _normalize_history_section_field(section_raw: str, field_raw: str) -> tuple[str, str]:
+    """Map free-form bot/client ids onto HistorySection (+ sensible field names)."""
+    s = str(section_raw or "").strip().lower()
+    f = str(field_raw or "").strip().lower() or "note"
+    # Older/buggy clients may send "HistorySection.CHIEF_COMPLAINT"
+    s = s.replace("historysection.", "").replace("history_section.", "")
+    s = s.replace(" ", "_")
+    f = f.replace("ayushfield.", "").replace("ayush_field.", "")
+    f = f.replace(" ", "_")
+
+    # Bot often parks AYUSH diet/routine answers under HPI with free-form field names.
+    ayush_field_aliases = {
+        "diet_preference": "ahara",
+        "diet": "ahara",
+        "food": "ahara",
+        "appetite": "agni",
+        "digestion": "agni",
+        "agni": "agni",
+        "routine": "vihara",
+        "daily_routine": "vihara",
+        "sleep": "vihara",
+        "sleep_pattern": "vihara",
+        "prakriti": "prakriti",
+        "vikriti": "vikriti",
+        "ahara": "ahara",
+        "vihara": "vihara",
+        "koshtha": "koshtha",
+        "nidana": "nidana",
+        "samprapti": "samprapti",
+    }
+    if f in ayush_field_aliases:
+        return HistorySection.AYUSH_ASSESSMENT.value, ayush_field_aliases[f]
+
+    # Alias → summary bucket, then summary bucket → canonical API section
+    bucket = SECTION_ALIASES.get(s) or FIELD_TO_SECTION.get(f)
+    api_section = {
+        "chief_complaint": HistorySection.CHIEF_COMPLAINT.value,
+        "hpi": HistorySection.HPI.value,
+        "past": HistorySection.PAST_MEDICAL.value,
+        "surgical": HistorySection.PAST_SURGICAL.value,
+        "medications": HistorySection.MEDICATIONS.value,
+        "allergies": HistorySection.ALLERGIES.value,
+        "family": HistorySection.FAMILY_HISTORY.value,
+        "personal": HistorySection.PERSONAL_HISTORY.value,
+        "ros": HistorySection.REVIEW_OF_SYSTEMS.value,
+        "ayush": HistorySection.AYUSH_ASSESSMENT.value,
+    }.get(bucket or "", "")
+
+    if not api_section:
+        # Last resort: accept already-canonical enum values
+        try:
+            api_section = HistorySection(s).value
+        except ValueError:
+            # Prefer HPI for symptom-ish fields, AYUSH for ayurvedic fields, else chief complaint
+            if f in FIELD_TO_SECTION and FIELD_TO_SECTION[f] == "hpi":
+                api_section = HistorySection.HPI.value
+            elif f in FIELD_TO_SECTION and FIELD_TO_SECTION[f] == "ayush":
+                api_section = HistorySection.AYUSH_ASSESSMENT.value
+            else:
+                api_section = HistorySection.CHIEF_COMPLAINT.value
+
+    if api_section == HistorySection.CHIEF_COMPLAINT.value and f in {
+        "complaint",
+        "note",
+        "chief_complaint",
+        HistorySection.CHIEF_COMPLAINT.value,
+    }:
+        f = "chief_complaint"
+    elif api_section == HistorySection.HPI.value:
+        # If client used section name as field (e.g. field=hpi), keep a usable id
+        if f in {"hpi", "note", api_section}:
+            f = "note"
+        try:
+            f = HPIField(f).value
+        except ValueError:
+            # Allow free-text HPI notes that aren't enum members
+            pass
+    elif api_section == HistorySection.AYUSH_ASSESSMENT.value:
+        if f in {"ayush", "ayush_assessment", "note", api_section}:
+            f = "ahara"
+        try:
+            f = AyushField(f).value
+        except ValueError:
+            pass
+    elif api_section == HistorySection.MEDICATIONS.value and f in {
+        "medication",
+        "medicine",
+        "meds",
+        "note",
+        "current_medicine",
+        "regular_medicines",
+        "regular_medicines_or_allergy",
+    }:
+        f = "medications"
+    elif api_section == HistorySection.ALLERGIES.value and f in {
+        "allergy",
+        "drug_allergy",
+        "note",
+    }:
+        f = "allergies"
+    elif api_section == HistorySection.ALLERGIES.value and f in {
+        "current_medicine",
+        "regular_medicines",
+        "regular_medicines_or_allergy",
+        "medications",
+    }:
+        # Bot sometimes dumps medicines under allergies — keep as allergy note only when "no"
+        api_section = HistorySection.MEDICATIONS.value
+        f = "medications"
+
+    return api_section, f
+
+
 @app.post("/api/encounters/{encounter_id}/history-fields")
 async def upsert_history_field(encounter_id: str, request: Request):
     body = await request.json()
@@ -419,40 +615,37 @@ async def upsert_history_field(encounter_id: str, request: Request):
     if not section_raw or not field_raw or value is None or str(value).strip() == "":
         raise HTTPException(status_code=422, detail="section, field, and value are required")
 
-    # Validation against structured clinical schemas
+    section_val, field_val = _normalize_history_section_field(str(section_raw), str(field_raw))
     try:
-        section = HistorySection(section_raw)
+        section = HistorySection(section_val)
     except ValueError:
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid section '{section_raw}'. Must be one of {[s.value for s in HistorySection]}"
+            detail=f"Invalid section '{section_raw}'. Must be one of {[s.value for s in HistorySection]}",
         )
 
     # Field validation depends on section
     if section == HistorySection.HPI:
         try:
-            # HPI fields must be within HPIField enum
-            HPIField(field_raw)
+            HPIField(field_val)
         except ValueError:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid HPI field '{field_raw}'. Must be one of {[f.value for f in HPIField]}"
-            )
+            # Soft-allow non-enum HPI notes so live interviews never drop facts
+            if not field_val or field_val == "note":
+                field_val = "associated_symptoms"
     elif section == HistorySection.AYUSH_ASSESSMENT:
         try:
-            # AYUSH fields must be within AyushField enum
-            AyushField(field_raw)
+            AyushField(field_val)
         except ValueError:
             raise HTTPException(
                 status_code=422,
-                detail=f"Invalid AYUSH field '{field_raw}'. Must be one of {[f.value for f in AyushField]}"
+                detail=f"Invalid AYUSH field '{field_raw}'. Must be one of {[f.value for f in AyushField]}",
             )
 
     try:
         return encounter_repository.upsert_history_field(
             encounter_id,
-            section=str(section),
-            field=str(field_raw),
+            section=str(section.value),
+            field=str(field_val),
             value=str(value).strip(),
             body_regions=body.get("body_regions") or body.get("bodyRegions") or [],
             source=str(body.get("source") or "voice"),
@@ -502,9 +695,22 @@ async def list_encounter_documents(encounter_id: str):
 
 
 @app.post("/api/encounters/{encounter_id}/summary/generate")
-async def generate_encounter_summary(encounter_id: str):
+async def generate_encounter_summary(encounter_id: str, request: Request):
+    # Doctor regenerate asks for LLM clinical reasoning; kiosk stays fast unless SUMMARY_REASONING=1.
+    include_raw = (request.query_params.get("include_reasoning") or "").strip().lower()
+    include_reasoning: bool | None
+    if include_raw in {"1", "true", "yes"}:
+        include_reasoning = True
+    elif include_raw in {"0", "false", "no"}:
+        include_reasoning = False
+    else:
+        include_reasoning = None
     try:
-        return summary_service.generate(encounter_id)
+        return await asyncio.to_thread(
+            summary_service.generate,
+            encounter_id,
+            include_reasoning=include_reasoning,
+        )
     except EncounterNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Encounter not found") from exc
 
@@ -583,9 +789,10 @@ async def list_doctor_encounters(request: Request):
 
 def _safe_list_documents(encounter_id: str) -> list[dict[str, Any]]:
     try:
-        return medical_document_repository.list_for_encounter(encounter_id, verify_exists=False)
+        docs = medical_document_repository.list_for_encounter(encounter_id, verify_exists=False)
     except LookupError:
         return []
+    return [_enrich_document_for_doctor(d) for d in docs]
 
 
 @app.get("/api/doctor/encounters/{encounter_id}")
@@ -760,12 +967,16 @@ async def scan_document(request: Request, background_tasks: BackgroundTasks):
     if not file:
         raise HTTPException(status_code=400, detail="No file provided")
 
-    suffix = Path(getattr(file, "filename", "") or "upload.jpg").suffix or ".jpg"
+    original_name = Path(getattr(file, "filename", "") or "upload.jpg").name or "upload.jpg"
+    suffix = Path(original_name).suffix.lower() or ".jpg"
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf", ".heic", ".tif", ".tiff"}:
+        suffix = ".bin"
     temp_path: str | None = None
+    file_bytes = await file.read()
     try:
         with tempfile.NamedTemporaryFile(prefix="ocr_", suffix=suffix, delete=False) as tmp:
             temp_path = tmp.name
-            tmp.write(await file.read())
+            tmp.write(file_bytes)
 
         if not (ocr_engine.gemini_model or ocr_engine.textract):
             raise HTTPException(
@@ -780,21 +991,30 @@ async def scan_document(request: Request, background_tasks: BackgroundTasks):
             stored_document, created = patient_history_service.persist_ocr_result(
                 patient_id,
                 extracted_data,
-                original_file_reference=getattr(file, "filename", None),
+                original_file_reference=None,
                 encounter_id=encounter_id,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        document_id = stored_document.get("id")
+        if document_id:
+            stored_name = f"{document_id}{suffix}"
+            dest = _upload_dir() / stored_name
+            dest.write_bytes(file_bytes)
+            stored_ref = f"{stored_name}|{original_name}"
+            medical_document_repository.set_original_file_reference(str(document_id), stored_ref)
+            stored_document["original_file_reference"] = stored_ref
+            stored_document["fileName"] = original_name
+            stored_document["hasFile"] = True
+            stored_document["fileUrl"] = f"/api/doctor/documents/{document_id}/file"
+            background_tasks.add_task(document_indexing_service.index_document, document_id)
 
         if encounter_id:
             try:
                 encounter_repository.set_step(encounter_id, "scan")
             except (EncounterNotFoundError, ValueError):
                 pass
-
-        document_id = stored_document.get("id")
-        if document_id:
-            background_tasks.add_task(document_indexing_service.index_document, document_id)
 
         clinical_events = clinical_extractor.structure_ocr_data(patient_id, extracted_data)
 
@@ -825,6 +1045,31 @@ async def scan_document(request: Request, background_tasks: BackgroundTasks):
     finally:
         if temp_path:
             _remove_temp_file(temp_path)
+
+
+@app.get("/api/doctor/documents/{document_id}/file")
+async def doctor_document_file(document_id: str, request: Request):
+    """Serve the original uploaded scan for staff review."""
+    _authorize_staff(request)
+    doc = medical_document_repository.get_by_id(document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    path = _resolve_uploaded_file(doc.get("original_file_reference"))
+    if path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Original file was not retained for this document. Ask the patient to re-upload.",
+        )
+    import mimetypes
+
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    download_name = path.name
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=download_name,
+        content_disposition_type="inline",
+    )
 
 
 def _authorize_patient(request: Request, patient_id: str) -> None:

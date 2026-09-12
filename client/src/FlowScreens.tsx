@@ -1,21 +1,30 @@
 import {
   createContext,
-  useCallback,
-  useContext,
   useEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { Languages, Volume2, VolumeX } from "lucide-react";
+import { Languages, Volume2 } from "lucide-react";
 import type { Language } from "./sessionTypes";
 import { SESSION_STEPS, type SessionStep } from "./sessionFlow";
 import type { ConsentScopes } from "./platformApi";
 import {
   confirmEncounterSummary,
   generateEncounterSummary,
+  getEncounterDocuments,
+  getEncounterHistory,
   scanDocument,
+  type SummaryDocExtract,
+  type SummarySection,
 } from "./platformApi";
+import type { UploadedDoc } from "./HistoryDocUpload";
+import {
+  buildDocExtractsFromApi,
+  buildDocExtractsFromUploads,
+  buildSummarySections,
+  cleanLegacyDraft,
+} from "./summaryBuild";
 import { speakGuide, stopSpeaking, useGuideNarration } from "./speakGuide";
 import "./FlowScreens.css";
 
@@ -69,7 +78,6 @@ function AskTopBar({
   replayText: string;
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const ambience = useContext(AmbienceContext);
   const lang = L(language);
   const idx = SESSION_STEPS.indexOf(step);
 
@@ -86,24 +94,13 @@ function AskTopBar({
           type="button"
           className="ask-icon-btn"
           aria-label={
-            ambience.muted
-              ? lang === "hi"
-                ? "संगीत चलाएँ"
-                : "Play music"
-              : lang === "hi"
-                ? "संगीत बंद"
-                : "Mute music"
+            lang === "hi" ? "गाइड फिर से सुनें" : "Replay guide"
           }
           onClick={() => {
-            ambience.toggle();
             void speakGuide(replayText, language);
           }}
         >
-          {ambience.muted ? (
-            <VolumeX size={20} strokeWidth={1.8} aria-hidden />
-          ) : (
-            <Volume2 size={20} strokeWidth={1.8} aria-hidden />
-          )}
+          <Volume2 size={20} strokeWidth={1.8} aria-hidden />
         </button>
 
         <div className="ask-settings-wrap">
@@ -135,7 +132,6 @@ function AskTopBar({
                   className={language === code ? "ask-lang-opt on" : "ask-lang-opt"}
                   onClick={() => {
                     stopSpeaking();
-                    ambience.unlock();
                     setLanguage(code);
                     setSettingsOpen(false);
                   }}
@@ -163,21 +159,20 @@ export function FlowProgress({ step }: { step: SessionStep; language?: Language 
 }
 
 /**
- * Persistent video + music for the whole pre-history flow.
- * Mount once around all step screens so BGM doesn’t restart/stop on navigation.
- * Tries unmuted autoplay on first open; falls back to mute-until-tap if the browser blocks it.
+ * Persistent muted video backdrop for the pre-history flow.
+ * Visual only — no background music.
  */
 export function FlowAmbience({ children }: { children: ReactNode }) {
   const figureRef = useRef<HTMLVideoElement>(null);
   const washRef = useRef<HTMLVideoElement>(null);
-  const [muted, setMuted] = useState(true);
 
   useEffect(() => {
     const figure = figureRef.current;
     const wash = washRef.current;
     if (!figure || !wash) return;
 
-    figure.volume = 0.5;
+    figure.muted = true;
+    figure.volume = 0;
     wash.muted = true;
 
     const sync = () => {
@@ -191,93 +186,24 @@ export function FlowAmbience({ children }: { children: ReactNode }) {
       if (wash.paused) void wash.play().catch(() => {});
     };
 
-    const playUnmuted = async () => {
-      figure.muted = false;
-      try {
-        await figure.play();
-        setMuted(false);
-        try {
-          sessionStorage.setItem("ayuvaani-bgm-on", "1");
-        } catch {
-          /* ignore */
-        }
-        return true;
-      } catch {
-        figure.muted = true;
-        setMuted(true);
-        await figure.play().catch(() => {});
-        return false;
-      }
-    };
-
     figure.addEventListener("timeupdate", sync);
     figure.addEventListener("pause", keepAlive);
     wash.addEventListener("pause", keepAlive);
 
     void wash.play().catch(() => {});
-    void playUnmuted();
-
-    // Retry once media can play / tab is visible (helps some browsers)
-    const onReady = () => {
-      void playUnmuted();
-    };
-    figure.addEventListener("loadeddata", onReady, { once: true });
-    figure.addEventListener("canplay", onReady, { once: true });
-
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void playUnmuted();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-
-    // Global first gesture unlock (browsers that block autoplay-with-sound)
-    const clearGestures = () => {
-      window.removeEventListener("pointerdown", unlockOnGesture, true);
-      window.removeEventListener("keydown", unlockOnGesture, true);
-      window.removeEventListener("touchstart", unlockOnGesture, true);
-    };
-    const unlockOnGesture = () => {
-      void playUnmuted().then((ok) => {
-        if (ok) clearGestures();
-      });
-    };
-    window.addEventListener("pointerdown", unlockOnGesture, true);
-    window.addEventListener("keydown", unlockOnGesture, true);
-    window.addEventListener("touchstart", unlockOnGesture, true);
+    void figure.play().catch(() => {});
 
     return () => {
       figure.removeEventListener("timeupdate", sync);
       figure.removeEventListener("pause", keepAlive);
       wash.removeEventListener("pause", keepAlive);
-      figure.removeEventListener("loadeddata", onReady);
-      figure.removeEventListener("canplay", onReady);
-      document.removeEventListener("visibilitychange", onVisible);
-      clearGestures();
     };
   }, []);
 
-  const setMutedState = useCallback((next: boolean) => {
-    const figure = figureRef.current;
-    if (!figure) return;
-    figure.muted = next;
-    setMuted(next);
-    void figure.play().catch(() => {});
-    try {
-      sessionStorage.setItem("ayuvaani-bgm-on", next ? "0" : "1");
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  const unlock = useCallback(() => {
-    setMutedState(false);
-  }, [setMutedState]);
-
-  const toggle = useCallback(() => {
-    setMutedState(!(figureRef.current?.muted ?? true));
-  }, [setMutedState]);
-
   return (
-    <AmbienceContext.Provider value={{ muted, toggle, unlock }}>
+    <AmbienceContext.Provider
+      value={{ muted: true, toggle: () => {}, unlock: () => {} }}
+    >
       <div className="ask-stage">
         <video
           ref={washRef}
@@ -295,7 +221,7 @@ export function FlowAmbience({ children }: { children: ReactNode }) {
             className="ask-stage-video ask-stage-video-figure"
             src="/guide-hero.mp4"
             autoPlay
-            muted={muted}
+            muted
             loop
             playsInline
           />
@@ -887,54 +813,102 @@ export function SummaryScreen({
   language,
   setLanguage,
   encounterId,
+  uploadedDocs = [],
   onConfirm,
 }: {
   step: SessionStep;
   language: Language;
   setLanguage: (l: Language) => void;
   encounterId: string | null;
+  uploadedDocs?: UploadedDoc[];
   onConfirm: () => void;
 }) {
   const lang = L(language);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draftEn, setDraftEn] = useState("");
-  const [draftHi, setDraftHi] = useState("");
+  const [draftText, setDraftText] = useState("");
+  const [sections, setSections] = useState<SummarySection[]>([]);
+  const [docs, setDocs] = useState<SummaryDocExtract[]>([]);
+
+  const uploadKey = uploadedDocs.map((d) => d.id).join("|");
 
   useEffect(() => {
     if (!encounterId) return;
     let cancelled = false;
     setBusy(true);
     setError(null);
-    void generateEncounterSummary(encounterId)
-      .then((summary) => {
+
+    void (async () => {
+      try {
+        const [summary, history, docRes] = await Promise.all([
+          generateEncounterSummary(encounterId).catch(() => null),
+          getEncounterHistory(encounterId).catch(() => null),
+          getEncounterDocuments(encounterId).catch(() => null),
+        ]);
         if (cancelled) return;
-        setDraftEn(summary.draftEn || "");
-        setDraftHi(summary.draftHi || "");
-      })
-      .catch((e) => {
+
+        const fromHistory = buildSummarySections(history?.fields || []);
+        const metaSections = Array.isArray(summary?.modelMeta?.sections)
+          ? summary!.modelMeta!.sections!
+          : [];
+        // Prefer freshly mapped history; fall back to API meta if history empty.
+        setSections(fromHistory.length ? fromHistory : metaSections);
+
+        const fromApi = buildDocExtractsFromApi(
+          docRes?.documents || [],
+          lang === "hi",
+        );
+        const fromUploads = buildDocExtractsFromUploads(
+          uploadedDocs,
+          lang === "hi",
+        );
+        // Prefer API docs when they have extract text; otherwise session uploads.
+        const merged =
+          fromApi.some((d) => d.summary) || fromApi.length >= fromUploads.length
+            ? fromApi.length
+              ? fromApi
+              : fromUploads
+            : fromUploads.length
+              ? fromUploads
+              : fromApi;
+        const metaDocs =
+          lang === "hi" && Array.isArray(summary?.modelMeta?.documentsHi)
+            ? summary!.modelMeta!.documentsHi!
+            : Array.isArray(summary?.modelMeta?.documents)
+              ? summary!.modelMeta!.documents!
+              : [];
+        setDocs(merged.length ? merged : metaDocs);
+
+        const raw =
+          lang === "hi"
+            ? summary?.draftHi || summary?.draftEn || ""
+            : summary?.draftEn || summary?.draftHi || "";
+        setDraftText(cleanLegacyDraft(raw));
+      } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : "Could not generate summary");
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setBusy(false);
-      });
+      }
+    })();
+
     return () => {
       cancelled = true;
     };
-  }, [encounterId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [encounterId, lang, uploadKey]);
 
-  const draft = lang === "hi" ? draftHi || draftEn : draftEn || draftHi;
   const question =
     lang === "hi" ? "क्या यह सही है?" : "Does this look correct?";
   const script =
     lang === "hi"
       ? "डॉक्टर के लिए छोटा सारांश। गलत लगे तो स्टाफ़ से कहें।"
       : "A short draft for your doctor. Ask staff if something looks wrong.";
+  const hasStructured = sections.length > 0 || docs.length > 0;
 
   return (
-    <main className="ask-screen">
+    <main className="ask-screen ask-screen--summary">
       <AskPanel
         top={
           <AskTopBar
@@ -948,15 +922,105 @@ export function SummaryScreen({
         <h1 className="ask-title">{question}</h1>
         <SpokenLine text={script} language={language} />
 
-        <div className="ask-summary-box" aria-live="polite">
-          {busy
-            ? lang === "hi"
-              ? "सारांश बन रहा है…"
-              : "Preparing summary…"
-            : draft ||
-              (lang === "hi"
-                ? "अभी कोई विवरण नहीं मिला।"
-                : "No details captured yet.")}
+        <div className="sum-board" aria-live="polite">
+          {busy ? (
+            <p className="sum-loading">
+              {lang === "hi" ? "सारांश बन रहा है…" : "Preparing summary…"}
+            </p>
+          ) : hasStructured ? (
+            <>
+              {sections.length > 0 ? (
+                <section className="sum-card">
+                  <header className="sum-card-head">
+                    <p className="sum-card-eyebrow">
+                      {lang === "hi" ? "क्लिनिकल इतिहास" : "Clinical history"}
+                    </p>
+                    <h2 className="sum-card-title">
+                      {lang === "hi" ? "आपके जवाब" : "Your answers"}
+                    </h2>
+                  </header>
+                  <div className="sum-grid">
+                    {sections.map((sec) => (
+                      <article key={sec.key} className="sum-block">
+                        <h3>{lang === "hi" ? sec.titleHi : sec.titleEn}</h3>
+                        <ul>
+                          {sec.items.map((item, i) => (
+                            <li key={`${sec.key}-${item.field}-${i}`}>
+                              {sec.items.length === 1 &&
+                              (item.field === "chief_complaint" ||
+                                item.field === "complaint") ? (
+                                <strong className="sum-value-only">
+                                  {item.value}
+                                </strong>
+                              ) : (
+                                <>
+                                  <span>
+                                    {lang === "hi"
+                                      ? item.labelHi
+                                      : item.labelEn}
+                                  </span>
+                                  <b>{item.value}</b>
+                                </>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              {docs.length > 0 ? (
+                <section className="sum-card sum-card--docs">
+                  <header className="sum-card-head">
+                    <p className="sum-card-eyebrow">
+                      {lang === "hi" ? "OCR / दस्तावेज़" : "OCR / documents"}
+                    </p>
+                    <h2 className="sum-card-title">
+                      {lang === "hi"
+                        ? "निकाली गई जानकारी"
+                        : "Extracted from papers"}
+                    </h2>
+                  </header>
+                  <div className="sum-docs">
+                    {docs.map((doc, i) => (
+                      <article key={`${doc.type}-${i}`} className="sum-doc">
+                        <div className="sum-doc-top">
+                          <strong>{doc.typeLabel || doc.type}</strong>
+                          {doc.date ? <span>{doc.date}</span> : null}
+                        </div>
+                        {doc.summary ? (
+                          <p>{doc.summary}</p>
+                        ) : (
+                          <p className="sum-doc-empty">
+                            {lang === "hi"
+                              ? "फ़ाइल सेव हो गई — विस्तृत निकाल उपलब्ध नहीं।"
+                              : "File saved — detailed extract unavailable."}
+                          </p>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              <p className="sum-note">
+                {lang === "hi"
+                  ? "नोट: डॉक्टर के लिए AI ड्राफ्ट — यह निदान नहीं है।"
+                  : "Note: AI-assisted draft for the physician — not a diagnosis."}
+              </p>
+            </>
+          ) : (
+            <div className="sum-card">
+              <p className="sum-fallback">
+                {draftText ||
+                  (lang === "hi"
+                    ? "इस विज़िट में अभी कोई विवरण नहीं मिला।"
+                    : "No details captured in this visit yet.")}
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="ask-actions">

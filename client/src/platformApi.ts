@@ -120,12 +120,28 @@ export function getEncounterHistory(encounterId: string): Promise<{
   return api(`/api/encounters/${encounterId}/history`);
 }
 
+export function getEncounterDocuments(encounterId: string): Promise<{
+  encounterId: string;
+  documents: Array<Record<string, unknown>>;
+}> {
+  return api(`/api/encounters/${encounterId}/documents`);
+}
+
 export type ScanDocumentResult = {
   status: string;
   summary?: string;
   ocr_status?: string;
-  medical_document?: { id?: string; document_type?: string };
+  document_info?: Record<string, unknown>;
+  patient_info?: Record<string, unknown>;
+  entities?: Array<Record<string, unknown>>;
+  structured_document?: unknown;
+  medical_document?: {
+    id?: string;
+    document_type?: string;
+    structured_data?: unknown;
+  };
   indexing_status?: string;
+  encounterId?: string | null;
 };
 
 export async function scanDocument(
@@ -158,13 +174,42 @@ export async function scanDocument(
   return res.json() as Promise<ScanDocumentResult>;
 }
 
+export type SummarySectionItem = {
+  field: string;
+  labelEn: string;
+  labelHi: string;
+  value: string;
+  bodyRegions?: string[];
+};
+
+export type SummarySection = {
+  key: string;
+  titleEn: string;
+  titleHi: string;
+  items: SummarySectionItem[];
+};
+
+export type SummaryDocExtract = {
+  type: string;
+  typeLabel: string;
+  date?: string;
+  summary?: string;
+};
+
 export type EncounterSummary = {
   id: string;
   encounterId: string;
   draftEn: string;
   draftHi: string;
   status: string;
-  modelMeta?: Record<string, unknown>;
+  modelMeta?: {
+    sections?: SummarySection[];
+    documents?: SummaryDocExtract[];
+    documentsHi?: SummaryDocExtract[];
+    fieldCount?: number;
+    documentCount?: number;
+    [key: string]: unknown;
+  };
   createdAt?: string | null;
   updatedAt?: string | null;
 };

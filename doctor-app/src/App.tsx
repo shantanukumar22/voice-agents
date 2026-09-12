@@ -4,6 +4,7 @@ import {
   createOrder,
   createPrescription,
   doctorConfirmSummary,
+  fetchDocumentFile,
   generateSummary,
   getDoctorReport,
   listDoctorEncounters,
@@ -12,6 +13,7 @@ import {
   verifyHistoryField,
   type DoctorReport,
   type Encounter,
+  type MedicalDocument,
 } from "./api";
 
 type NavId = "dashboard" | "queue" | "chart" | "rx" | "labs" | "settings";
@@ -84,9 +86,17 @@ function statusLabel(status: string): string {
 
 function humanizeField(value: string | null | undefined): string {
   if (!value) return "—";
+  const cleaned = value
+    .replace(/^HistorySection\./i, "")
+    .replace(/^HPIField\./i, "")
+    .trim();
   const map: Record<string, string> = {
     chief_complaint: "Chief complaint",
     hpi: "History of present illness",
+    past_medical_history: "Past history",
+    past_surgical_history: "Surgical history",
+    medications: "Medications",
+    allergies: "Allergies",
     duration: "Duration",
     onset: "Onset",
     severity: "Severity",
@@ -97,11 +107,332 @@ function humanizeField(value: string | null | undefined): string {
     family_history: "Family history",
     personal_history: "Personal history",
     ros: "Review of systems",
+    review_of_systems: "Review of systems",
+    ayush_assessment: "AYUSH assessment",
+    ayush: "AYUSH assessment",
+    prakriti: "Prakriti",
+    vikriti: "Vikriti",
+    agni: "Agni",
+    koshtha: "Koshtha",
+    ahara: "Diet (Ahara)",
+    vihara: "Routine (Vihara)",
+    nidana: "Nidana",
+    samprapti: "Samprapti",
+    dashavidha_pariksha: "Dashavidha pariksha",
+    diet_preference: "Diet (Ahara)",
+    diet: "Diet (Ahara)",
+    appetite: "Agni / appetite",
+    digestion: "Digestion (Agni)",
   };
-  if (map[value]) return map[value];
-  return value
+  if (map[cleaned]) return map[cleaned];
+  if (map[cleaned.toLowerCase()]) return map[cleaned.toLowerCase()];
+  return cleaned
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+const BRIEF_SECTIONS: Array<{ key: string; titleEn: string; titleHi: string }> = [
+  { key: "chief_complaint", titleEn: "Chief complaint", titleHi: "मुख्य शिकायत" },
+  { key: "hpi", titleEn: "History of present illness", titleHi: "वर्तमान बीमारी का इतिहास" },
+  { key: "past", titleEn: "Past history", titleHi: "पिछला इतिहास" },
+  { key: "surgical", titleEn: "Surgical history", titleHi: "सर्जरी इतिहास" },
+  { key: "medications", titleEn: "Medications", titleHi: "दवाइयाँ" },
+  { key: "allergies", titleEn: "Allergies", titleHi: "एलर्जी" },
+  { key: "family", titleEn: "Family history", titleHi: "पारिवारिक इतिहास" },
+  { key: "personal", titleEn: "Personal / social", titleHi: "व्यक्तिगत / सामाजिक" },
+  { key: "ros", titleEn: "Review of systems", titleHi: "सिस्टम समीक्षा" },
+  { key: "ayush", titleEn: "AYUSH assessment", titleHi: "आयुष मूल्यांकन" },
+  { key: "other", titleEn: "Other", titleHi: "अन्य" },
+];
+
+const BRIEF_SECTION_ALIASES: Record<string, string> = {
+  chief_complaint: "chief_complaint",
+  complaint: "chief_complaint",
+  cc: "chief_complaint",
+  hpi: "hpi",
+  history_of_present_illness: "hpi",
+  past: "past",
+  past_medical: "past",
+  past_medical_history: "past",
+  past_medical_surgical: "past",
+  surgical: "surgical",
+  past_surgical: "surgical",
+  past_surgical_history: "surgical",
+  medications: "medications",
+  medication: "medications",
+  meds: "medications",
+  allergies: "allergies",
+  allergy: "allergies",
+  drug_allergy: "allergies",
+  family: "family",
+  family_history: "family",
+  personal: "personal",
+  personal_history: "personal",
+  social: "personal",
+  social_history: "personal",
+  ros: "ros",
+  review_of_systems: "ros",
+  ayush: "ayush",
+  ayush_assessment: "ayush",
+  ayurveda: "ayush",
+  dashavidha: "ayush",
+  other: "other",
+};
+
+const BRIEF_FIELD_TO_SECTION: Record<string, string> = {
+  chief_complaint: "chief_complaint",
+  complaint: "chief_complaint",
+  onset: "hpi",
+  duration: "hpi",
+  severity: "hpi",
+  location: "hpi",
+  site: "hpi",
+  character: "hpi",
+  radiation: "hpi",
+  associated_symptoms: "hpi",
+  associations: "hpi",
+  medications: "medications",
+  medication: "medications",
+  allergies: "allergies",
+  allergy: "allergies",
+  prakriti: "ayush",
+  vikriti: "ayush",
+  agni: "ayush",
+  koshtha: "ayush",
+  ahara: "ayush",
+  vihara: "ayush",
+  nidana: "ayush",
+  samprapti: "ayush",
+  trividha_pariksha: "ayush",
+  ashtavidha_pariksha: "ayush",
+  dashavidha_pariksha: "ayush",
+  sara: "ayush",
+  samhanana: "ayush",
+  pramana: "ayush",
+  satmya: "ayush",
+  sattva: "ayush",
+  ahara_shakti: "ayush",
+  vyayama_shakti: "ayush",
+  vaya: "ayush",
+  diet_preference: "ayush",
+  diet: "ayush",
+  appetite: "ayush",
+  digestion: "ayush",
+  routine: "ayush",
+  daily_routine: "ayush",
+  sleep: "ayush",
+  sleep_pattern: "ayush",
+};
+
+function briefSectionKey(section: string, field: string): string {
+  let s = (section || "").trim().toLowerCase();
+  let f = (field || "").trim().toLowerCase();
+  s = s.replace(/^historysection\./, "").replace(/^history_section\./, "");
+  s = s.replace(/\s+/g, "_");
+  f = f.replace(/^hpifield\./, "").replace(/^ayushfield\./, "").replace(/\s+/g, "_");
+  const mapped = BRIEF_SECTION_ALIASES[s];
+  if (mapped && mapped !== "other") return mapped;
+  const inferred = BRIEF_FIELD_TO_SECTION[f];
+  if (inferred) return inferred;
+  if (BRIEF_SECTIONS.some((x) => x.key === s)) return s;
+  return "other";
+}
+
+const FIELD_LABELS_HI: Record<string, string> = {
+  chief_complaint: "मुख्य शिकायत",
+  complaint: "शिकायत",
+  onset: "शुरुआत",
+  duration: "अवधि",
+  severity: "तीव्रता",
+  location: "जगह",
+  site: "जगह",
+  character: "प्रकृति",
+  radiation: "फैलाव",
+  associated_symptoms: "संबंधित लक्षण",
+  associations: "संबंधित लक्षण",
+  medications: "दवाइयाँ",
+  medication: "दवा",
+  allergies: "एलर्जी",
+  allergy: "एलर्जी",
+  prakriti: "प्रकृति",
+  vikriti: "विकृति",
+  agni: "अग्नि",
+  koshtha: "कोष्ठ",
+  ahara: "आहार",
+  vihara: "विहार",
+  nidana: "निदान",
+  samprapti: "सम्प्राप्ति",
+  trividha_pariksha: "त्रिविध परीक्षा",
+  ashtavidha_pariksha: "अष्टविध परीक्षा",
+  dashavidha_pariksha: "दशविध परीक्षा",
+  diet_preference: "आहार",
+  diet: "आहार",
+  appetite: "अग्नि / भूख",
+  digestion: "अग्नि / पाचन",
+  note: "नोट",
+};
+
+function fieldLabel(field: string, lang: "en" | "hi"): string {
+  const f = field
+    .replace(/^HPIField\./i, "")
+    .replace(/^HistorySection\./i, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+  if (lang === "hi" && FIELD_LABELS_HI[f]) return FIELD_LABELS_HI[f];
+  return humanizeField(f);
+}
+
+function formatDocLine(doc: DoctorReport["documents"][number]): string {
+  const type = String(doc.document_type || "document").replace(/_/g, " ");
+  const label = type.replace(/\b\w/g, (c) => c.toUpperCase());
+  const raw = String(doc.clinical_document_date || "").trim();
+  const date = raw.includes("T") ? raw.split("T", 1)[0] : raw.slice(0, 10);
+  const head = date ? `${label} (${date})` : label;
+  const summary = String(doc.summary || "").trim();
+  return summary ? `${head} — ${summary}` : head;
+}
+
+function prettyDocType(value: string | null | undefined): string {
+  return String(value || "document")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function DocumentReviewCard({ doc }: { doc: MedicalDocument }) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewKind, setPreviewKind] = useState<"image" | "pdf" | "other" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  const loadFile = async (mode: "preview" | "open") => {
+    if (!doc.id) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const blob = await fetchDocumentFile(doc.id);
+      const url = URL.createObjectURL(blob);
+      if (mode === "open") {
+        window.open(url, "_blank", "noopener,noreferrer");
+        // Keep URL alive briefly so the new tab can load
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        return;
+      }
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(url);
+      if (blob.type.startsWith("image/")) setPreviewKind("image");
+      else if (blob.type === "application/pdf" || /\.pdf$/i.test(doc.fileName || doc.original_file_reference || "")) {
+        setPreviewKind("pdf");
+      } else setPreviewKind("other");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not open file");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <article className="mc-doc-card">
+      <div className="mc-doc-card-head">
+        <div>
+          <strong>{prettyDocType(doc.document_type)}</strong>
+          <p className="mc-doc-meta">
+            {formatWhen(doc.clinical_document_date || doc.extraction_timestamp)}
+            {doc.fileName ? ` · ${doc.fileName}` : ""}
+            {typeof doc.confidence_score === "number"
+              ? ` · ${Math.round(doc.confidence_score)}% OCR`
+              : ""}
+          </p>
+        </div>
+        <span className="mc-chip ok">Received</span>
+      </div>
+
+      <div className="mc-doc-summary">
+        <span className="mc-field-label">OCR summary</span>
+        <p>{doc.summary?.trim() || "No OCR summary was saved for this document."}</p>
+      </div>
+
+      <div className="mc-doc-actions">
+        {doc.hasFile ? (
+          <>
+            <button
+              type="button"
+              className="mc-btn ghost sm"
+              disabled={busy}
+              onClick={() => void loadFile("preview")}
+            >
+              {previewUrl ? "Refresh preview" : "Preview file"}
+            </button>
+            <button
+              type="button"
+              className="mc-btn primary sm"
+              disabled={busy}
+              onClick={() => void loadFile("open")}
+            >
+              Open file
+            </button>
+          </>
+        ) : (
+          <p className="mc-doc-nofile">
+            Original file was not kept for this scan. Re-upload on the kiosk to attach it.
+          </p>
+        )}
+      </div>
+
+      {error ? <p className="mc-doc-error">{error}</p> : null}
+
+      {previewUrl && previewKind === "image" ? (
+        <a className="mc-doc-preview" href={previewUrl} target="_blank" rel="noreferrer">
+          <img src={previewUrl} alt={prettyDocType(doc.document_type)} />
+        </a>
+      ) : null}
+      {previewUrl && previewKind === "pdf" ? (
+        <iframe className="mc-doc-preview-frame" title="Document preview" src={previewUrl} />
+      ) : null}
+      {previewUrl && previewKind === "other" ? (
+        <p className="mc-empty">Preview loaded — use Open file to view it.</p>
+      ) : null}
+    </article>
+  );
+}
+
+type BriefBlock = {
+  key: string;
+  title: string;
+  items: Array<{ label: string; value: string }>;
+};
+
+function buildBriefFromFields(
+  fields: DoctorReport["fields"] | undefined,
+  lang: "en" | "hi",
+): BriefBlock[] {
+  const grouped = new Map<string, Array<{ label: string; value: string }>>();
+  for (const row of fields || []) {
+    const field = String(row.field || "").trim() || "note";
+    const value = String(row.value || "").trim();
+    if (!value) continue;
+    const key = briefSectionKey(String(row.section || ""), field);
+    const list = grouped.get(key) || [];
+    list.push({ label: fieldLabel(field, lang), value });
+    grouped.set(key, list);
+  }
+  return BRIEF_SECTIONS.flatMap((sec) => {
+    const items = grouped.get(sec.key);
+    if (!items?.length) return [];
+    return [
+      {
+        key: sec.key,
+        title: lang === "hi" ? sec.titleHi : sec.titleEn,
+        items,
+      },
+    ];
+  });
 }
 
 function statusTone(status: string): "ok" | "warn" | "crit" | "muted" {
@@ -196,6 +527,60 @@ function SummaryPreview({ text }: { text: string }) {
           </div>
         ),
       )}
+    </div>
+  );
+}
+
+/** Prefer structured history fields over stale draft text (which used to dump everything under Other). */
+function StructuredBriefPreview({
+  fields,
+  documents,
+  lang,
+}: {
+  fields: DoctorReport["fields"];
+  documents: DoctorReport["documents"];
+  lang: "en" | "hi";
+}) {
+  const blocks = useMemo(() => buildBriefFromFields(fields, lang), [fields, lang]);
+  const docs = useMemo(
+    () => (documents || []).map(formatDocLine).filter(Boolean),
+    [documents],
+  );
+  if (!blocks.length && !docs.length) {
+    return <p className="mc-empty">{lang === "hi" ? "अभी कोई विवरण नहीं।" : "No history captured yet."}</p>;
+  }
+  return (
+    <div className="mc-note">
+      {blocks.map((block) => (
+        <div key={block.key} className="mc-note-section">
+          <h4>{block.title}</h4>
+          <dl className="mc-note-grid">
+            {block.items.map((item, j) => (
+              <div key={`${block.key}-${j}`} className="mc-note-row">
+                <dt>{item.label}</dt>
+                <dd>{item.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ))}
+      {docs.length > 0 ? (
+        <div className="mc-note-section">
+          <h4>{lang === "hi" ? "पूर्व जाँच / दस्तावेज़" : "Prior investigations / documents"}</h4>
+          <dl className="mc-note-grid">
+            {docs.map((line, j) => (
+              <div key={j} className="mc-note-row mc-note-row--full">
+                <span>{line}</span>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ) : null}
+      <p className="mc-note-disclaimer">
+        {lang === "hi"
+          ? "नोट: यह चिकित्सक के लिए AI-सहायता प्राप्त ड्राफ्ट है। यह निदान नहीं है।"
+          : "Note: This is an AI-assisted draft for the physician. It is not a diagnosis."}
+      </p>
     </div>
   );
 }
@@ -320,6 +705,7 @@ export default function App() {
   const [draftEn, setDraftEn] = useState("");
   const [draftHi, setDraftHi] = useState("");
   const [editingSummary, setEditingSummary] = useState(false);
+  const [reasoningLang, setReasoningLang] = useState<"en" | "hi">("en");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -369,6 +755,8 @@ export default function App() {
     setReport(data);
     setDraftEn(data.summary.draftEn || "");
     setDraftHi(data.summary.draftHi || "");
+    const encLang = (data.encounter.language || "").toLowerCase();
+    setReasoningLang(encLang.startsWith("hi") ? "hi" : "en");
   };
 
   useEffect(() => {
@@ -442,6 +830,11 @@ export default function App() {
   }, [filteredQueue]);
 
   const nextUp = waitingQueue[0] || null;
+
+  const briefLang: "en" | "hi" = useMemo(() => {
+    const code = (report?.encounter.language || "").toLowerCase();
+    return code.startsWith("hi") ? "hi" : "en";
+  }, [report?.encounter.language]);
 
   const clinicMix = useMemo(() => {
     const langs = new Map<string, number>();
@@ -1080,6 +1473,16 @@ export default function App() {
                   <span>
                     Language <b>{report.encounter.language}</b>
                   </span>
+                  {report.encounter.ayushMode ? (
+                    <>
+                      <span className="dot" aria-hidden>
+                        ·
+                      </span>
+                      <span>
+                        Mode <b>AYUSH</b>
+                      </span>
+                    </>
+                  ) : null}
                   <span className="dot" aria-hidden>
                     ·
                   </span>
@@ -1097,18 +1500,32 @@ export default function App() {
                 <section className="mc-panel">
                   <div className="mc-panel-head">
                     <h2>Clinical Reasoning</h2>
-                    <span className="mc-chip muted">AI Synthesis</span>
-                  </div>
-                  <div className="mc-split">
-                    <div className="mc-field">
-                      <span className="mc-field-label">English Insight</span>
-                      <p className="mc-note-value">{report.summary.reasoningEn || "No reasoning generated."}</p>
+                    <div className="mc-panel-head-actions">
+                      <div className="mc-lang-toggle" role="group" aria-label="Reasoning language">
+                        <button
+                          type="button"
+                          className={reasoningLang === "en" ? "is-on" : undefined}
+                          onClick={() => setReasoningLang("en")}
+                        >
+                          EN
+                        </button>
+                        <button
+                          type="button"
+                          className={reasoningLang === "hi" ? "is-on" : undefined}
+                          onClick={() => setReasoningLang("hi")}
+                        >
+                          हिं
+                        </button>
+                      </div>
+                      <span className="mc-chip muted">AI Synthesis</span>
                     </div>
-                    <div className="mc-field">
-                      <span className="mc-field-label">Hindi Insight</span>
-                      <p className="mc-note-value">{report.summary.reasoningHi || "कोई तर्क उत्पन्न नहीं हुआ।"}</p>
-                    </div>
                   </div>
+                  <p className="mc-note-value">
+                    {reasoningLang === "hi"
+                      ? report.summary.reasoningHi || "कोई तर्क उत्पन्न नहीं हुआ। Regenerate brief दबाएँ।"
+                      : report.summary.reasoningEn ||
+                        "No reasoning generated yet. Click Regenerate brief to synthesize."}
+                  </p>
                 </section>
 
                 <section className="mc-panel">
@@ -1128,26 +1545,25 @@ export default function App() {
                     </div>
                   </div>
                   {editingSummary ? (
-                    <div className="mc-split">
-                      <label className="mc-field">
-                        English draft
-                        <textarea
-                          className="mc-textarea-lg"
-                          value={draftEn}
-                          onChange={(e) => setDraftEn(e.target.value)}
-                          rows={14}
-                        />
-                      </label>
-                      <label className="mc-field">
-                        Hindi draft
-                        <textarea
-                          className="mc-textarea-lg"
-                          value={draftHi}
-                          onChange={(e) => setDraftHi(e.target.value)}
-                          rows={14}
-                        />
-                      </label>
-                    </div>
+                    <label className="mc-field">
+                      {briefLang === "hi" ? "Hindi draft" : "English draft"}
+                      <textarea
+                        className="mc-textarea-lg"
+                        value={briefLang === "hi" ? draftHi : draftEn}
+                        onChange={(e) =>
+                          briefLang === "hi"
+                            ? setDraftHi(e.target.value)
+                            : setDraftEn(e.target.value)
+                        }
+                        rows={14}
+                      />
+                    </label>
+                  ) : report.fields.length > 0 ? (
+                    <StructuredBriefPreview
+                      fields={report.fields}
+                      documents={report.documents}
+                      lang={briefLang}
+                    />
                   ) : !(draftEn.trim() || draftHi.trim()) ? (
                     <div className="mc-empty-brief">
                       <p className="mc-empty">
@@ -1171,16 +1587,7 @@ export default function App() {
                       </button>
                     </div>
                   ) : (
-                    <div className="mc-split">
-                      <div className="mc-field">
-                        <span className="mc-field-label">English</span>
-                        <SummaryPreview text={draftEn} />
-                      </div>
-                      <div className="mc-field">
-                        <span className="mc-field-label">Hindi</span>
-                        <SummaryPreview text={draftHi} />
-                      </div>
-                    </div>
+                    <SummaryPreview text={briefLang === "hi" ? draftHi : draftEn} />
                   )}
                 </section>
 
@@ -1391,6 +1798,15 @@ export default function App() {
                 <div className="mc-panel-head">
                   <h2>Scans & investigations</h2>
                 </div>
+
+                {report.documents.length > 0 ? (
+                  <div className="mc-doc-list">
+                    {report.documents.map((d, i) => (
+                      <DocumentReviewCard key={d.id || `doc-${i}`} doc={d} />
+                    ))}
+                  </div>
+                ) : null}
+
                 <div className="mc-table-wrap">
                   <table className="mc-table">
                     <thead>
@@ -1402,19 +1818,6 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {report.documents.map((d) => (
-                        <tr key={d.id}>
-                          <td>
-                            <strong>{d.document_type || "document"}</strong>
-                            <span className="mc-id">{shortId(d.id)}</span>
-                          </td>
-                          <td>Scanned document</td>
-                          <td>
-                            <span className="mc-chip ok">Received</span>
-                          </td>
-                          <td>{formatWhen(d.clinical_document_date || d.extraction_timestamp)}</td>
-                        </tr>
-                      ))}
                       {report.orders.map((o) => (
                         <tr key={o.id}>
                           <td>
@@ -1435,6 +1838,13 @@ export default function App() {
                           </td>
                         </tr>
                       )}
+                      {report.documents.length > 0 && !report.orders.length ? (
+                        <tr>
+                          <td colSpan={4}>
+                            <p className="mc-empty">No new investigation orders yet.</p>
+                          </td>
+                        </tr>
+                      ) : null}
                     </tbody>
                   </table>
                 </div>
