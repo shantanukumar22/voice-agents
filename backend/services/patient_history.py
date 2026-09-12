@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from backend.repositories.medical_documents import MedicalDocumentRepository
+from repositories.medical_documents import MedicalDocumentRepository
 
 
 DOCUMENT_TYPE_ALIASES = {

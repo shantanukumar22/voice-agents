@@ -5,8 +5,8 @@ import google.generativeai as genai
 from PIL import Image
 import boto3
 from dotenv import load_dotenv
-from backend.models.schema import DocumentType, EntityCategory
-from backend.models.ocr_schema import normalize_ocr_result
+from models.schema import DocumentType, EntityCategory
+from models.ocr_schema import normalize_ocr_result
 
 load_dotenv()
 

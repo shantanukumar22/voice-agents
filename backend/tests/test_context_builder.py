@@ -1,5 +1,12 @@
+import sys
+from pathlib import Path
 import unittest
-from backend.services.context_builder import ContextBuilder, BuiltContext
+
+backend_dir = Path(__file__).resolve().parents[1]
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
+
+from services.context_builder import ContextBuilder, BuiltContext
 
 
 class TestContextBuilder(unittest.TestCase):

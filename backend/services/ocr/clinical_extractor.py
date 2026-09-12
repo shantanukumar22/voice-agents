@@ -1,7 +1,7 @@
 import os
 import uuid
 from typing import List, Dict, Any
-from backend.models.schema import ClinicalEvent, Category, SourceType, Evidence
+from models.schema import ClinicalEvent, Category, SourceType, Evidence
 
 class ClinicalExtractor:
     """

@@ -1,9 +1,15 @@
+import sys
+from pathlib import Path
 import unittest
 from unittest.mock import MagicMock, patch
 
-from backend.services.context_builder import BuiltContext, ContextBuilder
-from backend.services.rag_generator import RAGAnswerGenerator, RAGAnswerResponse
-from backend.services.retrieval_service import RetrievalService
+backend_dir = Path(__file__).resolve().parents[1]
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
+
+from services.context_builder import BuiltContext, ContextBuilder
+from services.rag_generator import RAGAnswerGenerator, RAGAnswerResponse
+from services.retrieval_service import RetrievalService
 
 
 class TestRAGAnswerGenerator(unittest.TestCase):
@@ -12,7 +18,7 @@ class TestRAGAnswerGenerator(unittest.TestCase):
         self.mock_retrieval = MagicMock(spec=RetrievalService)
         self.mock_context_builder = MagicMock(spec=ContextBuilder)
 
-    @patch("backend.services.rag_generator.ChatGroq")
+    @patch("services.rag_generator.ChatGroq")
     def test_empty_query_raises(self, mock_chat_groq):
         generator = RAGAnswerGenerator(
             retrieval_service=self.mock_retrieval,
@@ -22,7 +28,7 @@ class TestRAGAnswerGenerator(unittest.TestCase):
         with self.assertRaises(ValueError):
             generator.answer_question("")
 
-    @patch("backend.services.rag_generator.ChatGroq")
+    @patch("services.rag_generator.ChatGroq")
     def test_no_retrieved_chunks_returns_fallback(self, mock_chat_groq):
         self.mock_retrieval.search_knowledge.return_value = []
         self.mock_context_builder.build_context.return_value = BuiltContext(
@@ -46,7 +52,7 @@ class TestRAGAnswerGenerator(unittest.TestCase):
         self.assertIn("does not contain information", resp.answer)
         self.assertEqual(resp.sources, [])
 
-    @patch("backend.services.rag_generator.ChatGroq")
+    @patch("services.rag_generator.ChatGroq")
     def test_successful_grounded_answer(self, mock_chat_groq):
         sample_chunk = {
             "chunk_id": "c1",

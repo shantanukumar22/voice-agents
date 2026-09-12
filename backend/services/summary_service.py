@@ -6,8 +6,8 @@ import os
 from typing import Any
 from openai import OpenAI
 
-from backend.repositories.encounters import EncounterRepository
-from backend.repositories.medical_documents import MedicalDocumentRepository
+from repositories.encounters import EncounterRepository
+from repositories.medical_documents import MedicalDocumentRepository
 
 SECTION_ORDER_EN = [
 

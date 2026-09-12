@@ -1,12 +1,16 @@
-from __future__ import annotations
-
+import sys
+from pathlib import Path
 import unittest
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from backend.repositories.medical_documents import PatientNotFoundError
-from backend.services.patient_history import InvalidOCRPayloadError, PatientHistoryService
+backend_dir = Path(__file__).resolve().parents[1]
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
+
+from repositories.medical_documents import PatientNotFoundError
+from services.patient_history import InvalidOCRPayloadError, PatientHistoryService
 
 
 class InMemoryMedicalDocumentRepository:

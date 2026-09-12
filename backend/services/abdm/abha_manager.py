@@ -3,7 +3,7 @@ import re
 import uuid
 import requests
 from typing import Dict, Any, Optional
-from backend.models.schema import ABHAInfo, ClinicalEvent
+from models.schema import ABHAInfo, ClinicalEvent
 from dotenv import load_dotenv
 
 load_dotenv()

@@ -9,9 +9,9 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
-from backend.services.context_builder import BuiltContext, ContextBuilder
-from backend.services.prompt_builder import PromptBuilder
-from backend.services.retrieval_service import RetrievalService
+from services.context_builder import BuiltContext, ContextBuilder
+from services.prompt_builder import PromptBuilder
+from services.retrieval_service import RetrievalService
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 

@@ -5,11 +5,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Ensure backend package is in python path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Ensure backend directory is in python path
+backend_dir = Path(__file__).resolve().parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
-from backend.database import open_pool, close_pool
-from backend.services.retrieval_service import RetrievalService
+from database import open_pool, close_pool
+from services.retrieval_service import RetrievalService
 
 
 # =====================================================================

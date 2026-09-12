@@ -18,9 +18,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-# The voice module predates package-style imports and imports sibling modules by name.
-# Add its repository-relative directory for both `python backend/server.py` and
-# `uvicorn backend.server:app`; this avoids machine-specific PYTHONPATH settings.
+# Add backend and bot directories to sys.path to support execution both from repository root
+# and when /backend is the working directory (e.g. Railway root directory).
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
 BOT_DIR = Path(__file__).resolve().parents[1] / "bot"
 if BOT_DIR.exists() and str(BOT_DIR) not in sys.path:
     sys.path.insert(0, str(BOT_DIR))
@@ -28,10 +31,7 @@ if BOT_DIR.exists() and str(BOT_DIR) not in sys.path:
 try:
     import ssl_fix
 except ModuleNotFoundError:
-    try:
-        import backend.ssl_fix as ssl_fix  # type: ignore
-    except (ImportError, ModuleNotFoundError):
-        ssl_fix = None  # type: ignore
+    ssl_fix = None  # type: ignore
 
 if ssl_fix and hasattr(ssl_fix, "apply"):
     ssl_fix.apply()
@@ -58,24 +58,24 @@ except (ImportError, ModuleNotFoundError):
 from psycopg import OperationalError
 from psycopg_pool.errors import PoolClosed, PoolTimeout
 
-from backend.services.abdm.abha_manager import ABHAManager
-from backend.services.ocr.ocr_engine import OCREngine
-from backend.services.ocr.clinical_extractor import ClinicalExtractor
-from backend.database import close_pool, migrate, open_pool
-from backend.repositories.medical_documents import (
+from services.abdm.abha_manager import ABHAManager
+from services.ocr.ocr_engine import OCREngine
+from services.ocr.clinical_extractor import ClinicalExtractor
+from database import close_pool, migrate, open_pool
+from repositories.medical_documents import (
     MedicalDocumentRepository,
     PatientNotFoundError,
 )
-from backend.services.patient_history import InvalidOCRPayloadError, PatientHistoryService
-from backend.services.document_indexing_service import DocumentIndexingService
-from backend.services.rag_generator import RAGAnswerGenerator
-from backend.repositories.encounters import (
+from services.patient_history import InvalidOCRPayloadError, PatientHistoryService
+from services.document_indexing_service import DocumentIndexingService
+from services.rag_generator import RAGAnswerGenerator
+from repositories.encounters import (
     EncounterNotFoundError,
     EncounterRepository,
     SESSION_STEPS,
 )
-from backend.services.summary_service import SummaryService
-from backend.models.clinical_schemas import HistorySection, HPIField, AyushField
+from services.summary_service import SummaryService
+from models.clinical_schemas import HistorySection, HPIField, AyushField
 
 # Platform secrets in backend/.env; voice keys may still live in bot/.env for integrated serve.
 _BACKEND_ENV = Path(__file__).resolve().parent / ".env"

@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from backend.database import get_pool
+from database import get_pool
 
 SESSION_STEPS = (
     "welcome",

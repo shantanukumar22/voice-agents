@@ -4,13 +4,18 @@ import json
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-import pytest
+import sys
+from pathlib import Path
 
-from backend.services.document_indexing_service import (
+backend_dir = Path(__file__).resolve().parents[1]
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
+
+from services.document_indexing_service import (
     DocumentIndexingService,
     compute_chunk_hash,
 )
-from backend.services.embedding_service import GeminiEmbeddingService
+from services.embedding_service import GeminiEmbeddingService
 
 
 def test_compute_chunk_hash_deterministic():

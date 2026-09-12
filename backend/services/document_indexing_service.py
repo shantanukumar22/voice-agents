@@ -9,10 +9,10 @@ from uuid import UUID
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from backend.database import get_pool, open_pool
-from backend.repositories.medical_documents import MedicalDocumentRepository
-from backend.services.chunker import MedicalChunker, count_tokens
-from backend.services.embedding_service import GeminiEmbeddingService
+from database import get_pool, open_pool
+from repositories.medical_documents import MedicalDocumentRepository
+from services.chunker import MedicalChunker, count_tokens
+from services.embedding_service import GeminiEmbeddingService
 
 logger = logging.getLogger(__name__)
 

@@ -6,9 +6,9 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from psycopg_pool import ConnectionPool
-from backend.database import get_pool, open_pool
-from backend.services.embedding_service import GeminiEmbeddingService
-from backend.services.context_builder import ContextBuilder, BuiltContext
+from database import get_pool, open_pool
+from services.embedding_service import GeminiEmbeddingService
+from services.context_builder import ContextBuilder, BuiltContext
 
 
 class RetrievalService:
