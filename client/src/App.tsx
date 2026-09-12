@@ -960,8 +960,8 @@ export default function App() {
   const progress = Math.min(
     100,
     Math.round((capturedSections.size / HISTORY_STEP_COUNT) * 100) ||
-      (fields.length ? Math.min(90, fields.length * 12) : 0) ||
-      (complete ? 100 : 8),
+    (fields.length ? Math.min(90, fields.length * 12) : 0) ||
+    (complete ? 100 : 8),
   );
 
   const tokenNo = (() => {
@@ -997,113 +997,113 @@ export default function App() {
       {!isConnected && sessionStep !== "history" && (
         <div className="flow-shell">
           <FlowAmbience>
-          {sessionStep === "welcome" && (
-            <WelcomeScreen
-              step={sessionStep}
-              language={language}
-              setLanguage={setLanguage}
-              ayushMode={ayushMode}
-              setAyushMode={setAyushMode}
-              onContinue={() => void startEncounter()}
-              busy={flowBusy}
-              error={error}
-            />
-          )}
+            {sessionStep === "welcome" && (
+              <WelcomeScreen
+                step={sessionStep}
+                language={language}
+                setLanguage={setLanguage}
+                ayushMode={ayushMode}
+                setAyushMode={setAyushMode}
+                onContinue={() => void startEncounter()}
+                busy={flowBusy}
+                error={error}
+              />
+            )}
 
-          {sessionStep === "identify" && (
-            <IdentifyScreen
-              step={sessionStep}
-              language={language}
-              setLanguage={setLanguage}
-              abhaId={abhaId}
-              setAbhaId={setAbhaId}
-              onVerify={() => void handleIdentify(false)}
-              onGuest={() => void handleIdentify(true)}
-              busy={flowBusy}
-              error={error}
-            />
-          )}
+            {sessionStep === "identify" && (
+              <IdentifyScreen
+                step={sessionStep}
+                language={language}
+                setLanguage={setLanguage}
+                abhaId={abhaId}
+                setAbhaId={setAbhaId}
+                onVerify={() => void handleIdentify(false)}
+                onGuest={() => void handleIdentify(true)}
+                busy={flowBusy}
+                error={error}
+              />
+            )}
 
-          {sessionStep === "consent" && (
-            <ConsentScreen
-              step={sessionStep}
-              language={language}
-              setLanguage={setLanguage}
-              scopes={consentScopes}
-              setScopes={setConsentScopes}
-              onGrant={() => void handleConsent()}
-              busy={flowBusy}
-              error={error}
-            />
-          )}
+            {sessionStep === "consent" && (
+              <ConsentScreen
+                step={sessionStep}
+                language={language}
+                setLanguage={setLanguage}
+                scopes={consentScopes}
+                setScopes={setConsentScopes}
+                onGrant={() => void handleConsent()}
+                busy={flowBusy}
+                error={error}
+              />
+            )}
 
-          {sessionStep === "scan" && (
-            <ScanScreen
-              step={sessionStep}
-              language={language}
-              setLanguage={setLanguage}
-              patientId={patientId}
-              encounterId={encounterId}
-              onContinue={() => void advanceStep("summary")}
-              onSkip={() => void advanceStep("summary")}
-            />
-          )}
+            {sessionStep === "scan" && (
+              <ScanScreen
+                step={sessionStep}
+                language={language}
+                setLanguage={setLanguage}
+                patientId={patientId}
+                encounterId={encounterId}
+                onContinue={() => void advanceStep("summary")}
+                onSkip={() => void advanceStep("summary")}
+              />
+            )}
 
-          {sessionStep === "summary" && (
-            <SummaryScreen
-              step={sessionStep}
-              language={language}
-              setLanguage={setLanguage}
-              encounterId={encounterId}
-              onConfirm={() => setSessionStep("submit")}
-            />
-          )}
+            {sessionStep === "summary" && (
+              <SummaryScreen
+                step={sessionStep}
+                language={language}
+                setLanguage={setLanguage}
+                encounterId={encounterId}
+                onConfirm={() => setSessionStep("submit")}
+              />
+            )}
 
-          {sessionStep === "submit" && (
-            <StubStepScreen
-              step={sessionStep}
-              language={language}
-              setLanguage={setLanguage}
-              titleHi="डॉक्टर के पास भेजें?"
-              titleEn="Send this to the doctor?"
-              bodyHi="आपका सत्र सुरक्षित जमा हो जाएगा।"
-              bodyEn="Your session will be saved securely."
-              primaryHi="हाँ, भेजें"
-              primaryEn="Yes, submit"
-              onPrimary={() => {
-                if (!encounterId) {
-                  setSessionStep("done");
-                  return;
-                }
-                setFlowBusy(true);
-                void submitEncounter(encounterId)
-                  .then(() => setSessionStep("done"))
-                  .catch((e) => {
-                    setError(
-                      e instanceof Error ? e.message : "Submit failed",
-                    );
-                  })
-                  .finally(() => setFlowBusy(false));
-              }}
-              art="docs"
-            />
-          )}
+            {sessionStep === "submit" && (
+              <StubStepScreen
+                step={sessionStep}
+                language={language}
+                setLanguage={setLanguage}
+                titleHi="डॉक्टर के पास भेजें?"
+                titleEn="Send this to the doctor?"
+                bodyHi="आपका सत्र सुरक्षित जमा हो जाएगा।"
+                bodyEn="Your session will be saved securely."
+                primaryHi="हाँ, भेजें"
+                primaryEn="Yes, submit"
+                onPrimary={() => {
+                  if (!encounterId) {
+                    setSessionStep("done");
+                    return;
+                  }
+                  setFlowBusy(true);
+                  void submitEncounter(encounterId)
+                    .then(() => setSessionStep("done"))
+                    .catch((e) => {
+                      setError(
+                        e instanceof Error ? e.message : "Submit failed",
+                      );
+                    })
+                    .finally(() => setFlowBusy(false));
+                }}
+                art="docs"
+              />
+            )}
 
-          {sessionStep === "done" && (
-            <StubStepScreen
-              step={sessionStep}
-              language={language}
-              setLanguage={setLanguage}
-              titleHi="हो गया — धन्यवाद"
-              titleEn="All done — thank you"
-              bodyHi="कृपया प्रतीक्षा करें या टोकन लें।"
-              bodyEn="Please wait or take your token."
-              primaryHi="नया मरीज़"
-              primaryEn="New patient"
-              onPrimary={resetFlow}
-              art="done"
-            />
-          )}
+            {sessionStep === "done" && (
+              <StubStepScreen
+                step={sessionStep}
+                language={language}
+                setLanguage={setLanguage}
+                titleHi="हो गया — धन्यवाद"
+                titleEn="All done — thank you"
+                bodyHi="कृपया प्रतीक्षा करें या टोकन लें।"
+                bodyEn="Please wait or take your token."
+                primaryHi="नया मरीज़"
+                primaryEn="New patient"
+                onPrimary={resetFlow}
+                art="done"
+              />
+            )}
           </FlowAmbience>
         </div>
       )}

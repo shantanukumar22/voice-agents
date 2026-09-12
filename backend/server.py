@@ -261,7 +261,7 @@ async def guide_tts(request: Request):
     if not text:
         raise HTTPException(status_code=422, detail="text is required")
     try:
-        from tts_guide import synthesize_guide_mp3
+        from services.tts_service import synthesize_guide_mp3
 
         audio = await synthesize_guide_mp3(text, language)
     except ValueError as exc:
