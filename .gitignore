@@ -14,3 +14,7 @@ project_idea.md
 scratch/
 backend/scratch/
 backend/scripts/
+
+# Local RAG scripts
+backend/ask_rag.py
+backend/eval_rag_pipeline.py

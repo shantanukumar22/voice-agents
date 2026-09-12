@@ -430,6 +430,12 @@ export function IdentifyScreen({
   onGuest,
   busy,
   error,
+  isOtpSent,
+  otpCode,
+  setOtpCode,
+  maskedEmail,
+  onVerifyOtp,
+  onResendOtp,
 }: {
   step: SessionStep;
   language: Language;
@@ -440,12 +446,21 @@ export function IdentifyScreen({
   onGuest: () => void;
   busy: boolean;
   error: string | null;
+  isOtpSent?: boolean;
+  otpCode?: string;
+  setOtpCode?: (v: string) => void;
+  maskedEmail?: string | null;
+  onVerifyOtp?: () => void;
+  onResendOtp?: () => void;
 }) {
   const lang = L(language);
   const [mode, setMode] = useState<"ask" | "abha">("ask");
 
-  const question =
-    mode === "ask"
+  const question = isOtpSent
+    ? lang === "hi"
+      ? `OTP दर्ज करें (${maskedEmail || "email"})`
+      : `Enter OTP sent to ${maskedEmail || "email"}`
+    : mode === "ask"
       ? lang === "hi"
         ? "क्या आपके पास abha नंबर है?"
         : "Do you have an abha number?"
@@ -453,8 +468,11 @@ export function IdentifyScreen({
         ? "अपना 14 अंकों का abha लिखें"
         : "Enter your 14-digit abha";
 
-  const script =
-    mode === "ask"
+  const script = isOtpSent
+    ? lang === "hi"
+      ? `कृपया आपके ईमेल ${maskedEmail || ""} पर भेजा गया 6 अंकों का OTP दर्ज करें।`
+      : `Please enter the 6 digit OTP sent to your email ${maskedEmail || ""}.`
+    : mode === "ask"
       ? lang === "hi"
         ? "क्या आपके पास abha नंबर है? हाँ या नहीं चुनें।"
         : "Do you have an abha number? Choose yes or no."
@@ -477,7 +495,45 @@ export function IdentifyScreen({
         <h1 className="ask-title">{question}</h1>
         <SpokenLine text={script} language={language} />
 
-        {mode === "ask" ? (
+        {isOtpSent ? (
+          <>
+            <input
+              className="ask-input"
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="123456"
+              value={otpCode || ""}
+              autoFocus
+              onChange={(e) =>
+                setOtpCode && setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+            />
+            <div className="ask-actions twin">
+              <button
+                type="button"
+                className="ask-btn secondary"
+                disabled={busy}
+                onClick={() => {
+                  stopSpeaking();
+                  onResendOtp && onResendOtp();
+                }}
+              >
+                {lang === "hi" ? "वापस / फिर से भेजें" : "Resend / Back"}
+              </button>
+              <button
+                type="button"
+                className="ask-btn primary"
+                disabled={busy || (otpCode?.length || 0) < 4}
+                onClick={() => {
+                  stopSpeaking();
+                  onVerifyOtp && onVerifyOtp();
+                }}
+              >
+                {busy ? "…" : lang === "hi" ? "OTP सत्यापित करें" : "Verify OTP"}
+              </button>
+            </div>
+          </>
+        ) : mode === "ask" ? (
           <div className="ask-actions twin">
             <button
               type="button"
@@ -536,7 +592,7 @@ export function IdentifyScreen({
                   onVerify();
                 }}
               >
-                {busy ? "…" : lang === "hi" ? "हाँ, आगे" : "Continue"}
+                {busy ? "…" : lang === "hi" ? "OTP भेजें" : "Send OTP"}
               </button>
             </div>
           </>

@@ -174,7 +174,11 @@ export default function App() {
   const [step, setStep] = useState<AppStep>("LANDING");
   const [language, setLanguage] = useState<Language>("hi");
   const [ayushMode, setAyushMode] = useState(false);
-  const [abhaId, setAbhaId] = useState("");
+  const [abhaId, setAbhaId] = useState("91-1234-5678-9012");
+  const [otpTransactionId, setOtpTransactionId] = useState<string | null>(null);
+  const [otpCode, setOtpCode] = useState("");
+  const [maskedEmail, setMaskedEmail] = useState<string | null>(null);
+  const [isOtpSent, setIsOtpSent] = useState(false);
   const [patientInfo, setPatientInfo] = useState<any | null>(null);
   const [scanResults, setScanResults] = useState<any[]>([]);
   const [historyEvents, setHistoryEvents] = useState<any[]>([]);
@@ -546,9 +550,47 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ abha_id: normalizedAbhaId }),
       });
-      if (!response.ok) throw new Error("Invalid ABHA ID");
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.detail || "Invalid ABHA ID");
+      }
+      const data = await response.json();
+      if (data.requires_otp) {
+        setOtpTransactionId(data.transaction_id);
+        setMaskedEmail(data.masked_email || "patient email");
+        setIsOtpSent(true);
+      } else {
+        setPatientInfo(data);
+        setStep("CONSENT");
+      }
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!otpCode || otpCode.trim().length === 0) {
+      setError("Please enter the OTP");
+      return;
+    }
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/verify-abha-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transaction_id: otpTransactionId,
+          otp: otpCode.trim(),
+          abha_id: abhaId.replace(/\D/g, ""),
+        }),
+      });
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.detail || "Invalid OTP code");
+      }
       const data = await response.json();
       setPatientInfo(data);
+      setIsOtpSent(false);
       setStep("CONSENT");
     } catch (e: any) {
       setError(e.message);
@@ -764,37 +806,87 @@ export default function App() {
         <div className="landing">
           <h1 className="hero-brand">{t.brand}</h1>
           <div className="setup">
-            <p className="label">{t.verifyAbha}</p>
-            <div className="input-group">
-              <input
-                type="text"
-                className={`input-field ${error ? "input-error" : ""}`}
-                placeholder="Enter ABHA ID (e.g. 12-3456-7890-1234)"
-                value={abhaId}
-                onChange={(e) => setAbhaId(e.target.value)}
-                inputMode="numeric"
-                maxLength={17}
-                autoFocus
-              />
-              {abhaId && (
+            {!isOtpSent ? (
+              <>
+                <p className="label">{t.verifyAbha}</p>
+                <div className="input-group">
+                  <input
+                    type="text"
+                    className={`input-field ${error ? "input-error" : ""}`}
+                    placeholder="Enter ABHA ID (e.g. 91-1234-5678-9012)"
+                    value={abhaId}
+                    onChange={(e) => setAbhaId(e.target.value)}
+                    inputMode="numeric"
+                    maxLength={17}
+                    autoFocus
+                  />
+                  {abhaId && (
+                    <button
+                      type="button"
+                      className="btn-clear"
+                      onClick={() => setAbhaId("")}
+                      aria-label="Clear input"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
                 <button
                   type="button"
-                  className="btn-clear"
-                  onClick={() => setAbhaId("")}
-                  aria-label="Clear input"
+                  className="btn solid wide"
+                  onClick={handleVerifyAbha}
+                  disabled={abhaId.length < 5}
                 >
-                  ✕
+                  Send OTP
                 </button>
-              )}
-            </div>
-            <button
-              type="button"
-              className="btn solid wide"
-              onClick={handleVerifyAbha}
-              disabled={abhaId.length < 5}
-            >
-              Verify
-            </button>
+              </>
+            ) : (
+              <>
+                <p className="label">Enter 6-digit OTP sent to {maskedEmail}</p>
+                <div className="input-group">
+                  <input
+                    type="text"
+                    className={`input-field ${error ? "input-error" : ""}`}
+                    placeholder="Enter 6-digit OTP (e.g. 123456)"
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value)}
+                    inputMode="numeric"
+                    maxLength={6}
+                    autoFocus
+                  />
+                  {otpCode && (
+                    <button
+                      type="button"
+                      className="btn-clear"
+                      onClick={() => setOtpCode("")}
+                      aria-label="Clear input"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="btn solid wide"
+                  onClick={handleVerifyOtp}
+                  disabled={otpCode.length < 4}
+                >
+                  Verify OTP
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost wide"
+                  style={{ marginTop: "8px" }}
+                  onClick={() => {
+                    setIsOtpSent(false);
+                    setOtpCode("");
+                    setError(null);
+                  }}
+                >
+                  Change ABHA ID / Resend
+                </button>
+              </>
+            )}
             {error && <p className="error">{error}</p>}
           </div>
         </div>
