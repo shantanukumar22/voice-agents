@@ -181,16 +181,37 @@ async def lifespan(app: FastAPI):
         await small_webrtc_handler.close()
 
 
-app = FastAPI(title="AYUVAANI Platform", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+def _get_cors_origins() -> list[str]:
+    origins = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
-    ],
-    allow_credentials=False,
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+    env_origins = os.getenv("CORS_ORIGINS") or os.getenv("FRONTEND_URL") or os.getenv("ALLOWED_ORIGINS")
+    if env_origins:
+        for item in env_origins.split(","):
+            cleaned = item.strip().rstrip("/")
+            if cleaned and cleaned not in origins:
+                origins.append(cleaned)
+    vercel_url = os.getenv("VERCEL_URL")
+    if vercel_url:
+        formatted = vercel_url.strip().rstrip("/")
+        if not formatted.startswith("http://") and not formatted.startswith("https://"):
+            formatted = f"https://{formatted}"
+        if formatted not in origins:
+            origins.append(formatted)
+    return origins
+
+
+app = FastAPI(title="AYUVAANI Platform", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_get_cors_origins(),
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -223,6 +244,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 @app.get("/health")
 async def health():
     return {
+        "status": "ok",
         "ok": True,
         "name": "ayuvaani-platform",
         "phases": ["P1", "P2-lite", "A-voice", "B-ocr"],

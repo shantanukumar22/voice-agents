@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { Language } from "./sessionTypes";
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
-  /\/$/,
-  "",
-) ?? "";
+const API_BASE = (
+  (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL) as string | undefined
+)?.replace(/\/$/, "") ?? "";
 
 let currentAudio: HTMLAudioElement | null = null;
 let currentUrl: string | null = null;
