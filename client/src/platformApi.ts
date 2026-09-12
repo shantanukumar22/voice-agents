@@ -68,6 +68,17 @@ export function identifyEncounter(
   });
 }
 
+export function verifyAbhaOtp(body: {
+  transaction_id: string;
+  otp: string;
+  abha_id?: string;
+}): Promise<any> {
+  return api("/api/verify-abha-otp", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export function grantConsent(
   encounterId: string,
   scopes: ConsentScopes,

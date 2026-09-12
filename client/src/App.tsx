@@ -28,6 +28,7 @@ import {
   setEncounterStep,
   submitEncounter,
   upsertHistoryField,
+  verifyAbhaOtp,
   type ConsentScopes,
 } from "./platformApi";
 import {
@@ -231,7 +232,11 @@ export default function App() {
   const [sessionStep, setSessionStep] = useState<SessionStep>("welcome");
   const [encounterId, setEncounterId] = useState<string | null>(null);
   const [patientId, setPatientId] = useState<string | null>(null);
-  const [abhaId, setAbhaId] = useState("");
+  const [abhaId, setAbhaId] = useState("91-1234-5678-9012");
+  const [otpTxId, setOtpTxId] = useState<string | null>(null);
+  const [otpCode, setOtpCode] = useState("");
+  const [isOtpSent, setIsOtpSent] = useState(false);
+  const [maskedEmail, setMaskedEmail] = useState<string | null>(null);
   const [flowBusy, setFlowBusy] = useState(false);
   const [consentScopes, setConsentScopes] = useState<ConsentScopes>({
     history_capture: true,
@@ -430,15 +435,27 @@ export default function App() {
       setFlowBusy(true);
       setError(null);
       try {
-        const res = await identifyEncounter(
-          encounterId,
-          guest
-            ? { guest: true, display_name: "Guest Patient" }
-            : { abha_id: abhaId },
-        );
-        if (res.patientId) setPatientId(res.patientId);
-        await setEncounterStep(encounterId, "consent");
-        setSessionStep("consent");
+        if (guest) {
+          const res = await identifyEncounter(encounterId, { guest: true, display_name: "Guest Patient" });
+          if (res.patientId) setPatientId(res.patientId);
+          await setEncounterStep(encounterId, "consent");
+          setSessionStep("consent");
+        } else {
+          const cleanAbha = abhaId.replace(/\D/g, "");
+          const resp = await fetch("/api/verify-abha", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ abha_id: cleanAbha }),
+          });
+          if (!resp.ok) {
+            const errJson = await resp.json().catch(() => ({}));
+            throw new Error(errJson.detail || "Invalid ABHA number");
+          }
+          const data = await resp.json();
+          setOtpTxId(data.transaction_id);
+          setMaskedEmail(data.masked_email || "patient email");
+          setIsOtpSent(true);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Identify failed");
       } finally {
@@ -447,6 +464,33 @@ export default function App() {
     },
     [encounterId, abhaId],
   );
+
+  const handleVerifyOtp = useCallback(async () => {
+    if (!encounterId || !otpTxId || !otpCode.trim()) return;
+    setFlowBusy(true);
+    setError(null);
+    try {
+      const cleanAbha = abhaId.replace(/\D/g, "");
+      const res = await verifyAbhaOtp({
+        transaction_id: otpTxId,
+        otp: otpCode.trim(),
+        abha_id: cleanAbha,
+      });
+      if (!res.abha_verified && !res.verified) {
+        throw new Error(res.detail || "OTP verification failed");
+      }
+      const identifyRes = await identifyEncounter(encounterId, { abha_id: cleanAbha });
+      if (identifyRes.patientId) setPatientId(identifyRes.patientId);
+      setIsOtpSent(false);
+      setOtpCode("");
+      await setEncounterStep(encounterId, "consent");
+      setSessionStep("consent");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Invalid OTP code");
+    } finally {
+      setFlowBusy(false);
+    }
+  }, [encounterId, otpTxId, otpCode, abhaId]);
 
   const handleConsent = useCallback(async () => {
     if (!encounterId) return;
@@ -1021,6 +1065,16 @@ export default function App() {
               onGuest={() => void handleIdentify(true)}
               busy={flowBusy}
               error={error}
+              isOtpSent={isOtpSent}
+              otpCode={otpCode}
+              setOtpCode={setOtpCode}
+              maskedEmail={maskedEmail}
+              onVerifyOtp={() => void handleVerifyOtp()}
+              onResendOtp={() => {
+                setIsOtpSent(false);
+                setOtpCode("");
+                setError(null);
+              }}
             />
           )}
 
