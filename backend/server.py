@@ -22,12 +22,19 @@ from typing import Any
 # Add its repository-relative directory for both `python backend/server.py` and
 # `uvicorn backend.server:app`; this avoids machine-specific PYTHONPATH settings.
 BOT_DIR = Path(__file__).resolve().parents[1] / "bot"
-if str(BOT_DIR) not in sys.path:
+if BOT_DIR.exists() and str(BOT_DIR) not in sys.path:
     sys.path.insert(0, str(BOT_DIR))
 
-import ssl_fix
+try:
+    import ssl_fix
+except ModuleNotFoundError:
+    try:
+        import backend.ssl_fix as ssl_fix  # type: ignore
+    except (ImportError, ModuleNotFoundError):
+        ssl_fix = None  # type: ignore
 
-ssl_fix.apply()
+if ssl_fix and hasattr(ssl_fix, "apply"):
+    ssl_fix.apply()
 
 import uvicorn
 from dotenv import load_dotenv
